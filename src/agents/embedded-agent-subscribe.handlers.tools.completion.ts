@@ -9,7 +9,7 @@ import {
   type AgentItemEventData,
   type AgentPatchSummaryEventData,
 } from "../infra/agent-activity-events.js";
-import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
+import type { AgentApprovalEventData } from "../infra/agent-events.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
@@ -75,6 +75,7 @@ import {
   buildToolItemTitle,
   buildToolStartKey,
   emitAgentEventCallbackBestEffort,
+  emitToolHandlerAgentEvent,
   emitTrackedItemEvent,
   isExecToolName,
   toolStartData,
@@ -428,12 +429,11 @@ export async function handleToolExecutionEnd(
         ...planUpdate,
       },
     };
-    emitAgentEvent({ runId: ctx.params.runId, ...planEvent });
+    emitToolHandlerAgentEvent(ctx, planEvent);
     emitAgentEventCallbackBestEffort(ctx, planEvent);
   }
 
-  emitAgentEvent({
-    runId: ctx.params.runId,
+  emitToolHandlerAgentEvent(ctx, {
     stream: "tool",
     data: {
       phase: "result",
