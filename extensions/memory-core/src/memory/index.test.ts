@@ -1046,6 +1046,53 @@ describe("memory index", () => {
     }
   });
 
+  it.each(["batch-test", "batch-wide-test"])(
+    "runs a follow-up watch sync when %s embedding is already active",
+    async (provider) => {
+      const cfg = createCfg({
+        provider,
+        batchEnabled: true,
+        vectorEnabled: false,
+      });
+      const manager = await getFreshManager(cfg, "cli");
+      let releaseBatchGate = () => {};
+      try {
+        await manager.sync({ reason: "watch-race-baseline", force: true });
+        await fs.writeFile(
+          path.join(fixture.paths.memory, "2026-01-12.md"),
+          "# Log\nAlpha memory line changed while indexing.\n",
+        );
+        (manager as unknown as { dirty: boolean }).dirty = true;
+        providerFixture.providerRuntimeBatchGate = new Promise<void>((resolve) => {
+          releaseBatchGate = resolve;
+        });
+
+        const activeSync = manager.sync({ reason: "watch-race-active" });
+        await vi.waitFor(() => expect(providerFixture.providerRuntimeActiveBatchCalls).toBe(1));
+
+        const latePath = path.join(fixture.paths.memory, "watch-race-late.md");
+        await fs.writeFile(latePath, "# Log\nLate watcher convergence marker.\n");
+        (manager as unknown as { dirty: boolean }).dirty = true;
+        const watchSync = manager.sync({ reason: "watch" });
+
+        releaseBatchGate();
+        await Promise.all([activeSync, watchSync]);
+
+        const database = Reflect.get(manager, "db") as DatabaseSync;
+        expect(
+          database
+            .prepare("SELECT path FROM memory_index_sources WHERE path = ? AND source = 'memory'")
+            .get("memory/watch-race-late.md"),
+        ).toEqual({ path: "memory/watch-race-late.md" });
+        expect(manager.status().dirty).toBe(false);
+      } finally {
+        releaseBatchGate();
+        providerFixture.providerRuntimeBatchGate = null;
+        await manager.close?.();
+      }
+    },
+  );
+
   it("bounds source-wide memory batches", async () => {
     const batchFileLimit = 2048;
     for (let index = 0; index < batchFileLimit; index += 1) {

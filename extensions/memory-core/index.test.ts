@@ -10,12 +10,13 @@ import { buildMemoryPromptSection } from "./src/memory-tool-contract.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 
 const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
+const closeAllMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => null));
 const authorizeSearchHitsMock = vi.hoisted(() => vi.fn(async ({ hits }) => hits));
 const createMemoryRuntimeMock = vi.hoisted(() =>
   vi.fn((_host: MemoryCoreRuntimeHost = {}) => ({
     authorizeSearchHits: authorizeSearchHitsMock,
-    closeAllMemorySearchManagers: vi.fn(async () => {}),
+    closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
     closeMemorySearchManager: closeMemorySearchManagerMock,
     getMemorySearchManager: getMemorySearchManagerMock,
   })),
@@ -24,7 +25,7 @@ const createMemoryRuntimeMock = vi.hoisted(() =>
 vi.mock("./src/runtime-provider.js", () => ({
   createMemoryRuntime: createMemoryRuntimeMock,
   memoryRuntime: {
-    closeAllMemorySearchManagers: vi.fn(async () => {}),
+    closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
     closeMemorySearchManager: closeMemorySearchManagerMock,
     getMemorySearchManager: getMemorySearchManagerMock,
   },
@@ -359,15 +360,47 @@ describe("memory-core plugin runtime registration", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps memory manager initialization demand-driven", () => {
+  it("starts watcher-owning managers with the gateway service", async () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "research" }],
+      },
+    } as OpenClawConfig;
+    let service: Parameters<OpenClawPluginApi["registerService"]>[0] | undefined;
     plugin.register(
       createTestPluginApi({
-        runtime: hostRuntime,
+        config: cfg,
+        runtime: hostRuntimeWithConfig(() => cfg),
+        registerService(candidate) {
+          if (candidate.id === "memory-core-watchers") {
+            service = candidate;
+          }
+        },
       }),
     );
 
     expect(createMemoryRuntimeMock).not.toHaveBeenCalled();
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+    if (!service) {
+      throw new Error("expected memory watcher service");
+    }
+
+    await service.start({
+      config: cfg,
+      stateDir: "/tmp/openclaw-memory-core-test",
+      logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(2);
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "research" });
+
+    await service.stop?.({
+      config: cfg,
+      stateDir: "/tmp/openclaw-memory-core-test",
+      logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    });
+    expect(closeAllMemorySearchManagersMock).toHaveBeenCalledOnce();
   });
 
   it("wires scoped memory search cleanup through the lazy runtime", async () => {

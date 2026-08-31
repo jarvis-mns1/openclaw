@@ -775,6 +775,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
         if (this.closed) {
           return;
         }
+        this.dirty = true;
         await this.sync({ reason: "watch" });
       }, "watch");
     }, this.settings.sync.watchDebounceMs);
