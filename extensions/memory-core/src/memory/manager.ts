@@ -55,6 +55,7 @@ import type { MemoryReindexRetryState } from "./manager-sync-base.js";
 import {
   enqueueMemoryTargetedSessionSync,
   hasTargetedSessionSyncParams,
+  MemoryWatchSyncQueue,
 } from "./manager-sync-control.js";
 import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
 
@@ -123,6 +124,13 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   private queuedForce = false;
   private queuedProgressCallbacks = new Set<NonNullable<MemorySyncParams["progress"]>>();
   private queuedSessionSync: Promise<void> | null = null;
+  private watchSyncQueue = new MemoryWatchSyncQueue(
+    () => this.syncing,
+    async () => {
+      this.dirty = true;
+      await this.syncAdmitted({ reason: "watch" });
+    },
+  );
   protected indexIdentityState: MemoryIndexIdentityState;
 
   static async get(params: {
@@ -286,6 +294,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   private async syncPublished(params?: MemorySyncParams): Promise<void> {
     if (this.closing || this.closed) {
       return;
+    }
+    if (params?.reason === "watch") {
+      return await this.watchSyncQueue.enqueue();
     }
     if (
       hasTargetedSessionSyncParams(params) &&
@@ -514,6 +525,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         this.dirty ||
         this.sessionsDirty ||
         this.indexIdentityDirty ||
+        this.watchSyncQueue.active ||
         this.activeBackgroundSearchSyncs.size > 0,
       lastSyncError: this.syncOutcomes.lastError,
       workspaceDir: this.workspaceDir,
@@ -616,6 +628,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     this.queuedSessions.clear();
     this.queuedForce = false;
     this.queuedProgressCallbacks.clear();
+    await this.watchSyncQueue.close();
     await this.awaitManagerIdle();
     this.closed = true;
     const pendingProviderInit = this.providerInitPromise;

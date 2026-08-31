@@ -462,6 +462,28 @@ describe("memory watcher config", () => {
     },
   );
 
+  it("reasserts dirty state after a settled watch event", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig();
+
+    const activeManager = await expectWatcherManager(cfg);
+    vi.useFakeTimers();
+    let dirtyAtSync = false;
+    const syncSpy = vi.spyOn(activeManager, "sync").mockImplementation(async () => {
+      dirtyAtSync = (activeManager as unknown as { dirty: boolean }).dirty;
+    });
+
+    const memoryWatcher = createdNativeWatchers.find(
+      (watcher) => watcher.dir === path.join(workspaceDir, "memory"),
+    );
+    memoryWatcher?.emit("change", "notes.md");
+    (activeManager as unknown as { dirty: boolean }).dirty = false;
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
+
+    expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+    expect(dirtyAtSync).toBe(true);
+  });
+
   it("forces broad re-sync when native watch emits null filename", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig();
