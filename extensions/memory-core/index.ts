@@ -244,6 +244,7 @@ export default definePluginEntry({
     api.registerService({
       id: "memory-core-watchers",
       async start(ctx) {
+        // SAFETY: both runtime sources expose the host's validated OpenClaw config.
         const config = (api.runtime.config?.current?.() ?? ctx.config) as OpenClawConfig;
         await Promise.all(
           listAgentIds(config).map(async (agentId) => {
