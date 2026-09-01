@@ -230,14 +230,8 @@ The scalar handler canonicalizes calls to these advertised fields, so a
 provider compatibility pass that removes object-closure keywords cannot route
 undeclared legacy batch fields into the model-facing parser. A batch-only
 payload is rejected at the model-visible handler even after that normalization.
-
-The separately named internal request entry point retains batch parsing and
-execution for non-model callers. Internal batches return
-`{ results: [{ query, candidates }] }` in request order and accept at most 16
-queries, 50 requested candidates, 512 characters per query, and 512 UTF-8 bytes
-across the serialized query list. If the complete batch would exceed the
-4,000-character response budget, lower-ranked candidates are removed and the
-response includes `truncated: true`.
+The legacy `queries` batch shape is retired; callers issue independent scalar
+searches instead of relying on an alternate contract hidden from the model.
 
 Directory mode exposes:
 
@@ -404,8 +398,8 @@ The regression proves:
 4. Tool Search exposes only the compact bridge plus any direct-only tools.
 5. The Tool Search request payload is smaller for the large fake catalog.
 6. Session logs show the expected tool-call counts and bridged call telemetry.
-7. Structured mode resolves two queries with one `tool_search` call before the
-   selected plugin tool runs through `tool_call`.
+7. Structured mode resolves one scalar query with one `tool_search` call before
+   the selected plugin tool runs through `tool_call`.
 
 ## Failure behavior
 

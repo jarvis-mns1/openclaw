@@ -187,7 +187,6 @@ import {
   extractToolSearchTarget,
   toolSearchOutputHasCandidate,
   buildQaToolSearchArgs,
-  QA_TOOL_SEARCH_SECONDARY_TARGET,
   isActiveMemorySubagentPrompt,
   isSnackRecallPrompt,
   extractSnackPreference,
@@ -1147,10 +1146,8 @@ async function buildResponsesPayload(
       hasDeclaredTool(body, "tool_search")
     ) {
       return buildToolCallEventsWithArgs("tool_search", {
-        queries: [
-          { query: targetTool, limit: 1 },
-          { query: QA_TOOL_SEARCH_SECONDARY_TARGET, limit: 1 },
-        ],
+        query: targetTool,
+        limit: 1,
       });
     }
     if (
