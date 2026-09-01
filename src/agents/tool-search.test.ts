@@ -31,6 +31,7 @@ import {
   resolveToolExecutionErrorKind,
 } from "./tool-result-error.js";
 import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
+import { executeInternalToolSearchRequest } from "./tool-search-execute.js";
 import { readToolSearchRequest } from "./tool-search-request.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
@@ -462,7 +463,7 @@ describe("Tool Search", () => {
     const duplicateQueries = Array.from({ length: 16 }, () => ({
       query: "boundary duplicate",
     }));
-    const duplicateResult = await testing.executeInternalToolSearchRequest(
+    const duplicateResult = await executeInternalToolSearchRequest(
       { config, catalogRef },
       {
         queries: duplicateQueries,
@@ -471,7 +472,7 @@ describe("Tool Search", () => {
     expect(resultDetails(duplicateResult).results).toHaveLength(16);
     expect(catalogRef.current?.searchCount).toBe(16);
 
-    const clampedResult = await testing.executeInternalToolSearchRequest(
+    const clampedResult = await executeInternalToolSearchRequest(
       { config, catalogRef },
       {
         queries: Array.from({ length: 5 }, (_, index) => ({
@@ -498,7 +499,7 @@ describe("Tool Search", () => {
       catalogRef,
     });
     await expect(
-      testing.executeInternalToolSearchRequest(
+      executeInternalToolSearchRequest(
         { config, catalogRef },
         {
           queries: [{ query: "atomic validation" }, { query: " " }],
@@ -549,7 +550,7 @@ describe("Tool Search", () => {
       (candidate) => candidate.id,
     );
 
-    const result = await testing.executeInternalToolSearchRequest(
+    const result = await executeInternalToolSearchRequest(
       { config, catalogRef },
       {
         queries: Array.from({ length: 5 }, () => ({ query: "large surface", limit: 10 })),
@@ -571,7 +572,7 @@ describe("Tool Search", () => {
     }
 
     const manyGroups = resultDetails(
-      await testing.executeInternalToolSearchRequest(
+      await executeInternalToolSearchRequest(
         { config, catalogRef },
         {
           queries: Array.from({ length: 16 }, () => ({ query: "large surface", limit: 1 })),
@@ -608,7 +609,7 @@ describe("Tool Search", () => {
       catalogRef,
     });
     const result = resultDetails(
-      await testing.executeInternalToolSearchRequest(
+      await executeInternalToolSearchRequest(
         { config, catalogRef },
         {
           queries: Array.from({ length: 16 }, () => ({ query: "large remote surface", limit: 1 })),
@@ -650,7 +651,7 @@ describe("Tool Search", () => {
     const clientTool = fakeTool(`client_large_name_${"n".repeat(20_000)}`, "oversized metadata");
     addClientToolsToToolSearchCatalog({ tools: [clientTool], config, catalogRef });
     const result = resultDetails(
-      await testing.executeInternalToolSearchRequest(
+      await executeInternalToolSearchRequest(
         { config, catalogRef },
         {
           queries: Array.from({ length: 16 }, () => ({
@@ -724,7 +725,7 @@ describe("Tool Search", () => {
       expect.objectContaining({ name: "fake_attention", source: "openclaw" }),
     ]);
 
-    const batch = await testing.executeInternalToolSearchRequest(
+    const batch = await executeInternalToolSearchRequest(
       { config, catalogRef },
       {
         queries: [
@@ -765,7 +766,7 @@ describe("Tool Search", () => {
       config,
       catalogRef,
     });
-    const result = await testing.executeInternalToolSearchRequest(
+    const result = await executeInternalToolSearchRequest(
       { config, catalogRef },
       {
         queries: [{ query: "directory calendar", limit: 1 }],
