@@ -4,6 +4,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  onSessionIdentityMutation,
+  type SessionIdentityMutationListener,
+} from "./session-lifecycle-events.js";
 
 /** Storage-neutral identity for the session transcript that changed. */
 type SessionTranscriptUpdateTarget = {
@@ -123,10 +127,15 @@ export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): 
 /** Registers an internal listener for identity-only or file-backed transcript updates. */
 export function onInternalSessionTranscriptUpdate(
   listener: InternalSessionTranscriptListener,
+  options?: { onIdentityMutation?: SessionIdentityMutationListener },
 ): () => void {
   INTERNAL_SESSION_TRANSCRIPT_LISTENERS.add(listener);
+  const unsubscribeIdentity = options?.onIdentityMutation
+    ? onSessionIdentityMutation(options.onIdentityMutation)
+    : undefined;
   return () => {
     INTERNAL_SESSION_TRANSCRIPT_LISTENERS.delete(listener);
+    unsubscribeIdentity?.();
   };
 }
 

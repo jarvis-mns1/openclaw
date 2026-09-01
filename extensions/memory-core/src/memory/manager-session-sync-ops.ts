@@ -19,7 +19,7 @@ import {
   type MemorySessionSyncTarget,
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { listMemorySessionTombstones } from "../memory-entry-origins.js";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
@@ -43,6 +43,12 @@ type MemorySessionTranscriptUpdate = {
     sessionId: string;
     sessionKey: string;
   };
+};
+
+type MemorySessionIdentityMutation = {
+  kind: "create" | "delete" | "move" | "replace" | "reset";
+  previous: { sessionKeys: readonly string[] };
+  current?: { sessionKeys: readonly string[] };
 };
 
 export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps {
@@ -131,27 +137,37 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     if (!this.sources.has("sessions") || this.sessionUnsubscribe) {
       return;
     }
-    this.sessionUnsubscribe = this.subscribeSessionTranscriptUpdates((update) => {
-      if (this.closed) {
-        return;
-      }
-      const target = this.resolveSessionTranscriptUpdateSyncTarget(update);
-      if (target) {
-        this.scheduleSessionDirty(target);
-        return;
-      }
-      if (update.sessionFile) {
-        void this.scheduleCorpusSessionFileDirty(update.sessionFile).catch((err: unknown) => {
-          log.warn(`memory session corpus update failed: ${String(err)}`);
-        });
-      }
-    });
+    this.sessionUnsubscribe = this.subscribeSessionTranscriptUpdates(
+      (update) => {
+        if (this.closed) {
+          return;
+        }
+        const target = this.resolveSessionTranscriptUpdateSyncTarget(update);
+        if (target) {
+          this.scheduleSessionDirty(target);
+          return;
+        }
+        if (update.sessionFile) {
+          void this.scheduleCorpusSessionFileDirty(update.sessionFile).catch((err: unknown) => {
+            log.warn(`memory session corpus update failed: ${String(err)}`);
+          });
+        }
+      },
+      (mutation) => {
+        if (this.closed || !this.sessionIdentityMutationTouchesAgent(mutation)) {
+          return;
+        }
+        this.sessionReconcilePending = true;
+        this.scheduleSessionUpdateBatch();
+      },
+    );
   }
 
   protected subscribeSessionTranscriptUpdates(
     listener: (update: MemorySessionTranscriptUpdate) => void,
+    identityListener: (mutation: MemorySessionIdentityMutation) => void,
   ): () => void {
-    return onInternalSessionTranscriptUpdate(listener);
+    return onInternalSessionTranscriptUpdate(listener, { onIdentityMutation: identityListener });
   }
 
   private async scheduleCorpusSessionFileDirty(sessionFile: string): Promise<void> {
@@ -265,6 +281,10 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     } else {
       this.sessionPendingTargets.set(this.memorySessionSyncTargetKey(target), target);
     }
+    this.scheduleSessionUpdateBatch();
+  }
+
+  private scheduleSessionUpdateBatch(): void {
     if (this.sessionWatchTimer) {
       return;
     }
@@ -277,9 +297,15 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
   }
 
   private async processSessionUpdateBatch(): Promise<void> {
-    if (this.sessionPendingFiles.size === 0 && this.sessionPendingTargets.size === 0) {
+    if (
+      this.sessionPendingFiles.size === 0 &&
+      this.sessionPendingTargets.size === 0 &&
+      !this.sessionReconcilePending
+    ) {
       return;
     }
+    const reconcileCorpus = this.sessionReconcilePending;
+    this.sessionReconcilePending = false;
     const pending = Array.from(this.sessionPendingFiles);
     const pendingTargets = Array.from(this.sessionPendingTargets.values());
     this.sessionPendingFiles.clear();
@@ -288,18 +314,40 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     for (const sessionFile of pending) {
       this.sessionsDirtyFiles.add(sessionFile);
     }
-    if (pending.length > 0) {
+    if (reconcileCorpus) {
       this.sessionsDirty = true;
-      // Keep both identity and file keys so every transcript backend enters the
-      // targeted queue instead of letting an active sync clear this newer event.
+      this.sessionsReconcileDirty = true;
+    }
+    if (pending.length > 0 || reconcileCorpus) {
+      this.sessionsDirty = true;
+      // Identity mutations require a corpus reconciliation so stale generations
+      // are removed. Transcript-only batches retain the cheaper targeted sync.
       void this.sync({
         reason: "session-delta",
-        sessions: pendingTargets,
-        archiveFiles: pending,
+        ...(reconcileCorpus
+          ? {}
+          : {
+              sessions: pendingTargets,
+              archiveFiles: pending,
+            }),
       }).catch((err: unknown) => {
         log.warn(`memory sync failed (session update): ${String(err)}`);
       });
     }
+  }
+
+  private sessionIdentityMutationTouchesAgent(mutation: MemorySessionIdentityMutation): boolean {
+    if (mutation.kind !== "replace") {
+      return false;
+    }
+    const sessionKeys = [
+      ...mutation.previous.sessionKeys,
+      ...(mutation.current?.sessionKeys ?? []),
+    ];
+    return sessionKeys.some((sessionKey) => {
+      const parsed = parseAgentSessionKey(sessionKey);
+      return parsed && normalizeAgentId(parsed.agentId) === normalizeAgentId(this.agentId);
+    });
   }
 
   private resolveSessionTranscriptUpdateSyncTarget(

@@ -672,6 +672,77 @@ describe("session startup catch-up", () => {
     }
   });
 
+  it("reconciles the previous SQLite generation after a session identity replacement", async () => {
+    vi.useFakeTimers();
+    const session = await writeSqliteSession({
+      sessionId: "previous-thread",
+      sessionKey: "agent:main:matrix:channel:thread",
+      content: "previous generation memory",
+    });
+    const replacementSessionId = "replacement-thread";
+    const replacementCorpusPath = `sessions/main/${replacementSessionId}.jsonl`;
+    const harness = new SessionStartupCatchupHarness(
+      [{ path: session.corpusPath, hash: "previous-hash", mtime: 10, size: 20 }],
+      true,
+      true,
+    );
+
+    expect(harness.getIndexedSourceState(session.corpusPath)).toBeDefined();
+    harness.startTranscriptListener();
+
+    try {
+      await upsertSessionEntry({
+        agentId: "main",
+        sessionKey: session.sessionKey,
+        storePath: session.storePath,
+        entry: {
+          sessionId: replacementSessionId,
+          updatedAt: 20,
+        },
+      });
+      await appendSessionTranscriptMessageByIdentity({
+        agentId: "main",
+        sessionId: replacementSessionId,
+        sessionKey: session.sessionKey,
+        storePath: session.storePath,
+        cwd: stateDir,
+        message: { role: "user", content: "replacement generation memory" },
+      });
+      await publishSessionTranscriptUpdateByIdentity({
+        ...session,
+        sessionId: replacementSessionId,
+      });
+
+      await vi.advanceTimersByTimeAsync(6000);
+      await harness.waitForSessionSync();
+
+      expect(harness.getIndexedSourceState(session.corpusPath)).toBeUndefined();
+      expect(harness.indexedPaths).toContain(replacementCorpusPath);
+      expect(harness.syncCalls.at(-1)).toMatchObject({ reason: "session-delta" });
+    } finally {
+      harness.stopTranscriptListener();
+    }
+  });
+
+  it("does not reconcile the corpus for a newly created session identity", async () => {
+    vi.useFakeTimers();
+    const harness = new SessionStartupCatchupHarness([], true, true);
+    harness.startTranscriptListener();
+
+    try {
+      await writeSqliteSession({
+        sessionId: "new-thread",
+        sessionKey: "agent:main:matrix:channel:new-thread",
+      });
+      await vi.advanceTimersByTimeAsync(6000);
+      await harness.waitForSessionSync();
+
+      expect(harness.syncCalls).toEqual([]);
+    } finally {
+      harness.stopTranscriptListener();
+    }
+  });
+
   it("indexes a real SQLite delete archive through the transcript listener", async () => {
     vi.useFakeTimers();
     const session = await writeSqliteSession({ content: "lifecycle archive memory" });
