@@ -128,7 +128,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     () => this.syncing,
     async () => {
       this.dirty = true;
-      await this.syncAdmitted({ reason: "watch" });
+      await this.syncAdmitted({ reason: "watch" }, { queuedOwner: true });
     },
   );
   protected indexIdentityState: MemoryIndexIdentityState;
@@ -333,21 +333,21 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     params?: MemorySyncParams,
     options?: {
       allowEmbeddingBootstrapFallback?: boolean;
-      queuedSessionOwner?: boolean;
+      queuedOwner?: boolean;
     },
   ): Promise<void> {
     if (this.syncing) {
-      if (hasTargetedSessionSyncParams(params)) {
-        if (options?.queuedSessionOwner) {
-          // Another caller claimed the sync slot after this queue owner was
-          // created. Wait for it, then retry admission instead of enqueueing
-          // into the promise that is already awaiting this call.
-          await this.syncing.catch(() => undefined);
-          if (this.closing || this.closed) {
-            return;
-          }
-          return await this.syncAdmitted(params, options);
+      if (options?.queuedOwner) {
+        // Another caller claimed the sync slot after this queue owner was
+        // created. Wait for it, then retry admission instead of treating that
+        // competing pass as completion of this queue's pending work.
+        await this.syncing.catch(() => undefined);
+        if (this.closing || this.closed) {
+          return;
         }
+        return await this.syncAdmitted(params, options);
+      }
+      if (hasTargetedSessionSyncParams(params)) {
         return this.enqueueTargetedSessionSync(params);
       }
       try {
@@ -466,7 +466,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         setQueuedSessionSync: (value) => {
           this.queuedSessionSync = value;
         },
-        sync: async (params) => await this.syncAdmitted(params, { queuedSessionOwner: true }),
+        sync: async (params) => await this.syncAdmitted(params, { queuedOwner: true }),
       },
       targets,
     );

@@ -1160,6 +1160,71 @@ describe("memory index", () => {
     },
   );
 
+  it("retries watch admission when a queued session sync takes the slot", async () => {
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        vectorEnabled: false,
+        sources: ["memory", "sessions"],
+        sessionMemory: true,
+      }),
+      "cli",
+    );
+    await manager.sync({ reason: "watch-admission-baseline", force: true });
+    let releaseActive = () => {};
+    let releaseSession = () => {};
+    const activeGate = new Promise<void>((resolve) => {
+      releaseActive = resolve;
+    });
+    const sessionGate = new Promise<void>((resolve) => {
+      releaseSession = resolve;
+    });
+    const owner = manager as unknown as {
+      dirty: boolean;
+      runSync: (params?: MemorySyncParams) => Promise<void>;
+    };
+    const runSync = vi
+      .spyOn(owner, "runSync")
+      .mockReturnValueOnce(activeGate)
+      .mockReturnValueOnce(sessionGate);
+
+    try {
+      const activeSync = manager.sync({ reason: "watch-admission-active" });
+      await vi.waitFor(() => expect(runSync).toHaveBeenCalledTimes(1));
+
+      const latePath = path.join(fixture.paths.memory, "watch-admission-late.md");
+      await fs.writeFile(latePath, "# Log\nWatcher admission retry marker.\n");
+      owner.dirty = true;
+      const sessionSync = manager.sync({
+        reason: "watch-admission-session",
+        sessions: [{ agentId: "main", sessionId: "watch-admission-session" }],
+      });
+      const watchSync = manager.sync({ reason: "watch" });
+
+      releaseActive();
+      await vi.waitFor(() => {
+        expect(runSync).toHaveBeenCalledTimes(2);
+        expect(runSync.mock.calls[1]?.[0]?.reason).toBe("queued-sessions");
+      });
+      releaseSession();
+      await Promise.all([activeSync, sessionSync, watchSync]);
+
+      expect(runSync.mock.calls.map(([params]) => params?.reason)).toContain("watch");
+      const database = Reflect.get(manager, "db") as DatabaseSync;
+      expect(
+        database
+          .prepare("SELECT path FROM memory_index_sources WHERE path = ? AND source = 'memory'")
+          .get("memory/watch-admission-late.md"),
+      ).toEqual({ path: "memory/watch-admission-late.md" });
+      expect(manager.status().dirty).toBe(false);
+    } finally {
+      releaseActive();
+      releaseSession();
+      runSync.mockRestore();
+      await manager.close?.();
+    }
+  });
+
   it("bounds source-wide memory batches", async () => {
     const batchFileLimit = 2048;
     for (let index = 0; index < batchFileLimit; index += 1) {
