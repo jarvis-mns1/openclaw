@@ -191,6 +191,10 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     prefixIndexItems?: MemoryIndexWorkItem[];
   }): Promise<MemorySourceSyncPlan>;
 
+  adoptReindexRetryState(snapshot: MemoryReindexRetryState): void {
+    this.restoreReindexRetryState(snapshot);
+  }
+
   protected async indexFiles(items: MemoryIndexWorkItem[]): Promise<void> {
     for (const item of items) {
       await this.indexFile(item.entry, { source: item.source });

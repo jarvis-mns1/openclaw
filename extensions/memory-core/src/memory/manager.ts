@@ -51,7 +51,6 @@ import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import { runMemorySearchMaintenance } from "./manager-search-maintenance.js";
 import { MemorySearchOrchestration } from "./manager-search-orchestration.js";
 import { collectMemoryStatusAggregate, resolveStatusProviderInfo } from "./manager-status-state.js";
-import type { MemoryReindexRetryState } from "./manager-sync-base.js";
 import {
   enqueueMemoryTargetedSessionSync,
   hasTargetedSessionSyncParams,
@@ -285,10 +284,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       throw new Error("Memory status managers are read-only");
     }
     return await this.withPublishedDatabase(() => this.syncPublished(params));
-  }
-
-  adoptReindexRetryState(snapshot: MemoryReindexRetryState): void {
-    this.restoreReindexRetryState(snapshot);
   }
 
   private async syncPublished(params?: MemorySyncParams): Promise<void> {
