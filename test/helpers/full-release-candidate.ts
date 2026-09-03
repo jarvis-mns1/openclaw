@@ -3,6 +3,7 @@ import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-can
 
 const TARGET_SHA = "a".repeat(40);
 const TOOLING_SHA = "b".repeat(40);
+const ARTIFACT_EXPIRES_AT = "2099-09-04T12:00:00Z";
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -51,7 +52,7 @@ export function fullReleaseCandidateArtifact(
     name,
     id: "101",
     digest: "c".repeat(64),
-    expiresAt: "2026-09-04T12:00:00Z",
+    expiresAt: ARTIFACT_EXPIRES_AT,
     runId: "77",
     runAttempt: "1",
     ...overrides,

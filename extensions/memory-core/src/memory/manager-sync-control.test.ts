@@ -4,7 +4,16 @@ import type {
   MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
-import { enqueueMemoryTargetedSessionSync } from "./manager-sync-control.js";
+import { enqueueMemoryTargetedSessionSync, MemoryWatchSyncQueue } from "./manager-sync-control.js";
+
+function createWatchSyncHarness(syncing: Promise<void>) {
+  const sync = vi.fn(async () => {});
+  const queue = new MemoryWatchSyncQueue(() => syncing, sync);
+  return {
+    queue,
+    sync,
+  };
+}
 
 function createQueuedSyncHarness(params: { syncing: Promise<void>; archiveFiles?: string[] }) {
   let closed = false;
@@ -49,6 +58,47 @@ function createQueuedSyncHarness(params: { syncing: Promise<void>; archiveFiles?
 }
 
 describe("memory manager sync control", () => {
+  it("runs another watch pass when a change arrives during the queued follow-up", async () => {
+    let releaseActive = () => {};
+    const active = new Promise<void>((resolve) => {
+      releaseActive = resolve;
+    });
+    let releaseFollowUp = () => {};
+    const followUp = new Promise<void>((resolve) => {
+      releaseFollowUp = resolve;
+    });
+    const harness = createWatchSyncHarness(active);
+    harness.sync.mockReturnValueOnce(followUp).mockResolvedValueOnce(undefined);
+
+    const first = harness.queue.enqueue();
+    releaseActive();
+    await vi.waitFor(() => expect(harness.sync).toHaveBeenCalledTimes(1));
+
+    const second = harness.queue.enqueue();
+    expect(second).toBe(first);
+    releaseFollowUp();
+    await first;
+
+    expect(harness.sync).toHaveBeenCalledTimes(2);
+    expect(harness.queue.active).toBe(false);
+  });
+
+  it("releases a queued watch request when the manager closes", async () => {
+    let releaseActive = () => {};
+    const active = new Promise<void>((resolve) => {
+      releaseActive = resolve;
+    });
+    const harness = createWatchSyncHarness(active);
+
+    const queued = harness.queue.enqueue();
+    const closed = harness.queue.close();
+    releaseActive();
+    await Promise.all([queued, closed]);
+
+    expect(harness.sync).not.toHaveBeenCalled();
+    expect(harness.queue.active).toBe(false);
+  });
+
   it("queues targeted session files behind an in-flight sync", async () => {
     let releaseSync = () => {};
     const pendingSync = new Promise<void>((resolve) => {

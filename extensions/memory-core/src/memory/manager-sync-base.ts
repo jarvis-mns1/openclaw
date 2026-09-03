@@ -159,6 +159,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected sessionsDirtyFiles = new Set<string>();
   protected sessionPendingFiles = new Set<string>();
   protected sessionPendingTargets = new Map<string, MemorySessionSyncTarget>();
+  protected sessionReconcilePending = false;
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
   protected abstract computeProviderKey(): string;
@@ -189,6 +190,10 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     deferIndex?: boolean;
     prefixIndexItems?: MemoryIndexWorkItem[];
   }): Promise<MemorySourceSyncPlan>;
+
+  adoptReindexRetryState(snapshot: MemoryReindexRetryState): void {
+    this.restoreReindexRetryState(snapshot);
+  }
 
   protected async indexFiles(items: MemoryIndexWorkItem[]): Promise<void> {
     for (const item of items) {

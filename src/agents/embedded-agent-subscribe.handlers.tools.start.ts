@@ -292,6 +292,18 @@ export function emitAgentEventCallbackBestEffort(
   });
 }
 
+export function emitToolHandlerAgentEvent(
+  ctx: ToolHandlerContext,
+  event: Omit<Parameters<typeof emitAgentEvent>[0], "runId">,
+): void {
+  emitAgentEvent({
+    runId: ctx.params.runId,
+    ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+    ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
+    ...event,
+  });
+}
+
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
   const normalized = normalizeOptionalLowercaseString(toolName);
   if (normalized !== "exec" && normalized !== "bash") {
@@ -487,8 +499,7 @@ export function handleToolExecutionStart(
     );
 
     const shouldEmitToolEvents = ctx.shouldEmitToolResult();
-    emitAgentEvent({
-      runId: ctx.params.runId,
+    emitToolHandlerAgentEvent(ctx, {
       stream: "tool",
       data: {
         phase: "start",
