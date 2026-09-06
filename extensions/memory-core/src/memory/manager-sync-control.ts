@@ -44,6 +44,7 @@ export class MemoryWatchSyncQueue {
   }
 
   private async drain(): Promise<void> {
+    let failure: { error: unknown } | undefined;
     try {
       const syncing = this.getSyncing();
       if (syncing) {
@@ -51,7 +52,16 @@ export class MemoryWatchSyncQueue {
       }
       while (!this.closed && this.pending) {
         this.pending = false;
-        await this.sync();
+        try {
+          await this.sync();
+        } catch (error) {
+          // A failed pass must not strand arrivals sharing this queue owner.
+          // Drain only notified work, then preserve the failure for its callers.
+          failure ??= { error };
+        }
+      }
+      if (failure) {
+        throw failure.error;
       }
     } finally {
       if (this.closed) {

@@ -1,4 +1,5 @@
 // Memory Core tests cover manager sync control plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   MemorySessionSyncTarget,
   MemorySyncParams,
@@ -58,6 +59,39 @@ function createQueuedSyncHarness(params: { syncing: Promise<void>; archiveFiles?
 }
 
 describe("memory manager sync control", () => {
+  it.each([
+    { arrival: false, close: false, followUpFails: false, calls: 1 },
+    { arrival: true, close: false, followUpFails: false, calls: 2 },
+    { arrival: true, close: false, followUpFails: true, calls: 2 },
+    { arrival: true, close: true, followUpFails: false, calls: 1 },
+  ])("settles failed watch work with $arrival/$close/$followUpFails", async (scenario) => {
+    const failure = new Error("watch sync failed");
+    const blocked = createDeferred<void>();
+    const harness = createWatchSyncHarness(Promise.resolve());
+    harness.sync.mockReturnValueOnce(blocked.promise);
+    if (scenario.followUpFails) {
+      harness.sync.mockRejectedValueOnce(new Error("follow-up sync failed"));
+    }
+    const queued = harness.queue.enqueue();
+    const settled = expect(queued).rejects.toBe(failure);
+    await vi.waitFor(() => expect(harness.sync).toHaveBeenCalledTimes(1));
+
+    if (scenario.arrival) {
+      expect(harness.queue.enqueue()).toBe(queued);
+    }
+    const closing = scenario.close ? harness.queue.close() : undefined;
+    blocked.reject(failure);
+    await settled;
+    await closing;
+
+    expect(harness.sync).toHaveBeenCalledTimes(scenario.calls);
+    expect(harness.queue.active).toBe(false);
+    if (!scenario.close) {
+      await harness.queue.enqueue();
+      expect(harness.sync).toHaveBeenCalledTimes(scenario.calls + 1);
+    }
+  });
+
   it("runs another watch pass when a change arrives during the queued follow-up", async () => {
     let releaseActive = () => {};
     const active = new Promise<void>((resolve) => {

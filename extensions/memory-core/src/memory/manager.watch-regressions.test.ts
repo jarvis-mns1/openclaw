@@ -185,6 +185,45 @@ describe("carried memory watch admission regressions", () => {
     }
   });
 
+  it("indexes a pending file after the active watch pass rejects", async () => {
+    const manager = await getFreshManager(
+      createConfig({ provider: "none", vectorEnabled: false, onSearch: false }),
+      "cli",
+    );
+    await manager.sync({ reason: "watch-failure-baseline", force: true });
+    const active = createDeferred<void>();
+    const failure = new Error("watch indexing failed");
+    const owner = manager as unknown as {
+      runSync: (params?: MemorySyncParams) => Promise<void>;
+    };
+    const runSync = vi.spyOn(owner, "runSync").mockReturnValueOnce(active.promise);
+    const pending: Promise<void>[] = [];
+    try {
+      pending.push(manager.sync({ reason: "watch" }));
+      await vi.waitFor(() => expect(runSync).toHaveBeenCalledTimes(1));
+      await fs.writeFile(
+        path.join(fixture.paths.memory, "watch-after-failure.md"),
+        "# Log\nPending alpha memory survives an earlier failed pass.\n",
+      );
+      markMemoryDirty(manager);
+      pending.push(manager.sync({ reason: "watch" }));
+      const settled = Promise.allSettled(pending);
+      active.reject(failure);
+      const outcomes = await settled;
+
+      expect(indexedMemoryPath(manager, "watch-after-failure.md")).toEqual({
+        path: "memory/watch-after-failure.md",
+      });
+      expect(manager.status().dirty).toBe(false);
+      expect(outcomes).toEqual(pending.map(() => ({ status: "rejected", reason: failure })));
+    } finally {
+      active.resolve();
+      await Promise.allSettled(pending);
+      runSync.mockRestore();
+      await manager.close();
+    }
+  });
+
   it("releases pending watch work when the manager closes", async () => {
     const manager = await getFreshManager(
       createConfig({ provider: "batch-test", batchEnabled: true, vectorEnabled: false }),
