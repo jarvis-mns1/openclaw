@@ -12,6 +12,56 @@ export function hasTargetedSessionSyncParams(params: MemorySyncParams | undefine
   );
 }
 
+export class MemoryWatchSyncQueue {
+  private queued: Promise<void> | null = null;
+  private pending = false;
+  private closed = false;
+
+  constructor(
+    private readonly getSyncing: () => Promise<void> | null,
+    private readonly sync: () => Promise<void>,
+  ) {}
+
+  get active(): boolean {
+    return this.queued !== null;
+  }
+
+  enqueue(): Promise<void> {
+    if (this.closed) {
+      return Promise.resolve();
+    }
+    this.pending = true;
+    if (!this.queued) {
+      this.queued = this.drain();
+    }
+    return this.queued;
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+    this.pending = false;
+    await this.queued?.catch(() => undefined);
+  }
+
+  private async drain(): Promise<void> {
+    try {
+      const syncing = this.getSyncing();
+      if (syncing) {
+        await syncing.catch(() => undefined);
+      }
+      while (!this.closed && this.pending) {
+        this.pending = false;
+        await this.sync();
+      }
+    } finally {
+      if (this.closed) {
+        this.pending = false;
+      }
+      this.queued = null;
+    }
+  }
+}
+
 export function enqueueMemoryTargetedSessionSync(
   state: {
     isClosed: () => boolean;

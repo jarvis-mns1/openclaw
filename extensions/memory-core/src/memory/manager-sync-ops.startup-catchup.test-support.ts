@@ -48,6 +48,12 @@ type MemorySessionTranscriptUpdate = {
   };
 };
 
+type MemorySessionIdentityMutation = {
+  kind: "create" | "delete" | "move" | "replace" | "reset";
+  previous: { sessionKeys: readonly string[] };
+  current?: { sessionKeys: readonly string[] };
+};
+
 const originalStartupStateDir = process.env.OPENCLAW_STATE_DIR;
 const originalStartupConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 let transcriptUpdateListener: ((update: MemorySessionTranscriptUpdate) => void) | undefined;
@@ -293,9 +299,10 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
 
   protected override subscribeSessionTranscriptUpdates(
     listener: (update: MemorySessionTranscriptUpdate) => void,
+    identityListener: (mutation: MemorySessionIdentityMutation) => void,
   ): () => void {
     if (this.subscribeToRealEvents) {
-      return super.subscribeSessionTranscriptUpdates(listener);
+      return super.subscribeSessionTranscriptUpdates(listener, identityListener);
     }
     transcriptUpdateListener = listener;
     return () => {
