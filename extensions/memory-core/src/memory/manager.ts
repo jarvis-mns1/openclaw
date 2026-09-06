@@ -54,10 +54,10 @@ import {
   collectMemoryStorageStatus,
   resolveStatusProviderInfo,
 } from "./manager-status-state.js";
-import type { MemoryReindexRetryState } from "./manager-sync-base.js";
 import {
   enqueueMemoryTargetedSessionSync,
   hasTargetedSessionSyncParams,
+  MemoryWatchSyncQueue,
 } from "./manager-sync-control.js";
 import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
 
@@ -120,6 +120,13 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   private queuedForce = false;
   private queuedProgressCallbacks = new Set<NonNullable<MemorySyncParams["progress"]>>();
   private queuedSessionSync: Promise<void> | null = null;
+  private watchSyncQueue = new MemoryWatchSyncQueue(
+    () => this.syncing,
+    async () => {
+      this.dirty = true;
+      await this.syncAdmitted({ reason: "watch" }, { queuedOwner: true });
+    },
+  );
   protected indexIdentityState: MemoryIndexIdentityState;
 
   static async get(params: {
@@ -281,13 +288,12 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     return await this.withPublishedDatabase(() => this.syncPublished(params));
   }
 
-  adoptReindexRetryState(snapshot: MemoryReindexRetryState): void {
-    this.restoreReindexRetryState(snapshot);
-  }
-
   private async syncPublished(params?: MemorySyncParams): Promise<void> {
     if (this.closing || this.closed) {
       return;
+    }
+    if (params?.reason === "watch") {
+      return await this.watchSyncQueue.enqueue();
     }
     if (
       hasTargetedSessionSyncParams(params) &&
@@ -299,7 +305,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       // call through the queue even while idle so it adopts that retained work.
       return await this.enqueueTargetedSessionSync(params);
     }
-    return await this.syncAdmitted(params);
+    return await this.syncAdmitted(params, {
+      queuedOwner: params?.reason === "session-reconcile",
+    });
   }
 
   protected async syncPublishedIndexInBackground(params: { reason: string }): Promise<void> {
@@ -324,21 +332,21 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     params?: MemorySyncParams,
     options?: {
       allowEmbeddingBootstrapFallback?: boolean;
-      queuedSessionOwner?: boolean;
+      queuedOwner?: boolean;
     },
   ): Promise<void> {
     if (this.syncing) {
-      if (hasTargetedSessionSyncParams(params)) {
-        if (options?.queuedSessionOwner) {
-          // Another caller claimed the sync slot after this queue owner was
-          // created. Wait for it, then retry admission instead of enqueueing
-          // into the promise that is already awaiting this call.
-          await this.syncing.catch(() => undefined);
-          if (this.closing || this.closed) {
-            return;
-          }
-          return await this.syncAdmitted(params, options);
+      if (options?.queuedOwner) {
+        // Another caller claimed the sync slot after this queue owner was
+        // created. Wait for it, then retry admission instead of treating that
+        // competing pass as completion of this queue's pending work.
+        await this.syncing.catch(() => undefined);
+        if (this.closing || this.closed) {
+          return;
         }
+        return await this.syncAdmitted(params, options);
+      }
+      if (hasTargetedSessionSyncParams(params)) {
         return this.enqueueTargetedSessionSync(params);
       }
       try {
@@ -358,6 +366,11 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       }
     }
     const run = async () => {
+      // An older pass can clear pending files while reconciliation awaits admission.
+      // Refresh the canonical corpus only after that pass settles.
+      if (params?.reason === "session-reconcile") {
+        await this.markSessionStartupCatchupDirtyFiles();
+      }
       const hadBootstrapFailure = this.embeddingBootstrapFailure !== undefined;
       let forceFtsOnly =
         this.embeddingBootstrapFailure !== undefined &&
@@ -457,7 +470,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         setQueuedSessionSync: (value) => {
           this.queuedSessionSync = value;
         },
-        sync: async (params) => await this.syncAdmitted(params, { queuedSessionOwner: true }),
+        sync: async (params) => await this.syncAdmitted(params, { queuedOwner: true }),
       },
       targets,
     );
@@ -520,6 +533,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         this.dirty ||
         this.sessionsDirty ||
         this.indexIdentityDirty ||
+        this.watchSyncQueue.active ||
         this.activeBackgroundSearchSyncs.size > 0,
       lastSyncError: this.syncOutcomes.lastError,
       workspaceDir: this.workspaceDir,
@@ -625,6 +639,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     this.queuedSessions.clear();
     this.queuedForce = false;
     this.queuedProgressCallbacks.clear();
+    await this.watchSyncQueue.close();
     await this.awaitManagerIdle();
     this.closed = true;
     const pendingProviderInit = this.providerInitPromise;

@@ -3,6 +3,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
   jsonResult,
+  listAgentIds,
   type MemoryPluginRuntime,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -241,6 +242,21 @@ export default definePluginEntry({
     const memoryRuntime = createLazyMemoryRuntime(host);
     registerShortTermPromotionDreaming(api);
     registerSessionBackfillGatewayMethods(api);
+    api.registerService({
+      id: "memory-core-watchers",
+      async start(ctx) {
+        // SAFETY: gateway services receive the canonical OpenClaw config snapshot.
+        const config = (api.runtime.config?.current?.() ?? ctx.config) as OpenClawConfig;
+        await Promise.all(
+          listAgentIds(config).map(async (agentId) => {
+            await memoryRuntime.getMemorySearchManager({ cfg: config, agentId });
+          }),
+        );
+      },
+      async stop() {
+        await memoryRuntime.closeAllMemorySearchManagers?.();
+      },
+    });
     api.registerMemoryCapability({
       deterministicRecallToolName: "memory_search",
       supportsPrivateTranscriptRecall: true,

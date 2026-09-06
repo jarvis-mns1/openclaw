@@ -221,7 +221,12 @@ function createTestContext(): {
   return { ctx, warn, onBlockReplyFlush, onAgentEvent, onExecutionPhase, trace, isEnabled };
 }
 
-type CapturedAgentEvent = { stream?: string; data?: Record<string, unknown> };
+type CapturedAgentEvent = {
+  stream?: string;
+  data?: Record<string, unknown>;
+  sessionKey?: string;
+  agentId?: string;
+};
 
 function requireEvent(
   events: CapturedAgentEvent[],
@@ -243,6 +248,43 @@ function requireString(value: unknown, label: string): string {
   }
   return value;
 }
+
+describe("tool event ownership", () => {
+  it("stamps the captured agent and session on late-capable lifecycle events", async () => {
+    const { ctx } = createTestContext();
+    const emitted: CapturedAgentEvent[] = [];
+    const unsubscribe = registerAgentEventListener((event) => emitted.push(event));
+    try {
+      await startTool(ctx, {
+        toolName: "gateway",
+        toolCallId: "tool-owned",
+        args: { action: "status" },
+      });
+      updateTool(ctx, {
+        toolName: "gateway",
+        toolCallId: "tool-owned",
+        partialResult: { status: "running" },
+      });
+      await endTool(ctx, {
+        toolName: "gateway",
+        toolCallId: "tool-owned",
+        isError: false,
+        result: { status: "ok" },
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    const toolEvents = emitted.filter((event) => event.stream === "tool");
+    expect(toolEvents.map((event) => event.data?.phase)).toEqual(["start", "update", "result"]);
+    for (const event of toolEvents) {
+      expect(event).toMatchObject({
+        agentId: "agent-test-id",
+        sessionKey: "agent:unit-session",
+      });
+    }
+  });
+});
 
 describe("progress_card compatibility plan events", () => {
   it("emits the typed full plan snapshot after a successful write", async () => {
