@@ -230,7 +230,7 @@ bridge calls and snapshot resume; consumers do not reconstruct it from the
 catalog.
 
 The catalog omits code-mode control tools (`exec`, `wait`, `tool_search_code`,
-`tool_search`, `tool_describe`, `tool_call`) and direct-only tools. Controls
+`tool_search`, `tool_search_batch`, `tool_describe`, `tool_call`) and direct-only tools. Controls
 must not recurse through the catalog; direct-only tools remain model-visible
 because their structured results cannot cross the QuickJS bridge.
 
@@ -247,7 +247,7 @@ is active.
 
 When Code Mode engages through forced `true` or `"auto"` activation:
 
-- OpenClaw does not expose `tool_search_code`, `tool_search`, `tool_describe`,
+- OpenClaw does not expose `tool_search_code`, `tool_search`, `tool_search_batch`, `tool_describe`,
   or `tool_call` as model-visible tools.
 - The same cataloging idea moves inside the guest runtime.
 - The guest runtime receives bare async globals plus callable search/describe

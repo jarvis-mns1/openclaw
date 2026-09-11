@@ -11,6 +11,7 @@ import {
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
+  TOOL_SEARCH_BATCH_TOOL_NAME,
 } from "../tool-search.js";
 import { testing } from "../tool-search.test-support.js";
 import { createAgentsWaitTool } from "../tools/agents-wait-tool.js";
@@ -83,6 +84,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           "tool_search",
           "tool_describe",
           "tool_call",
+          "tool_search_batch",
           "read",
           ...(directMessage ? ["message"] : []),
         ]);
@@ -235,6 +237,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
         .compactTools(
           tools([
             TOOL_SEARCH_RAW_TOOL_NAME,
+            TOOL_SEARCH_BATCH_TOOL_NAME,
             TOOL_DESCRIBE_RAW_TOOL_NAME,
             TOOL_CALL_RAW_TOOL_NAME,
             "exec",
@@ -244,6 +247,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
         .tools.map((tool) => tool.name),
     ).toEqual([
       TOOL_SEARCH_RAW_TOOL_NAME,
+      TOOL_SEARCH_BATCH_TOOL_NAME,
       TOOL_DESCRIBE_RAW_TOOL_NAME,
       TOOL_CALL_RAW_TOOL_NAME,
       "exec",
@@ -258,6 +262,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     };
     const availableTools = tools([
       TOOL_SEARCH_RAW_TOOL_NAME,
+      TOOL_SEARCH_BATCH_TOOL_NAME,
       TOOL_DESCRIBE_RAW_TOOL_NAME,
       TOOL_CALL_RAW_TOOL_NAME,
       "read",
@@ -278,6 +283,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     try {
       const expected = [
         TOOL_SEARCH_RAW_TOOL_NAME,
+        TOOL_SEARCH_BATCH_TOOL_NAME,
         TOOL_DESCRIBE_RAW_TOOL_NAME,
         TOOL_CALL_RAW_TOOL_NAME,
         "read",
@@ -304,6 +310,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           .compactTools(
             tools([
               TOOL_SEARCH_RAW_TOOL_NAME,
+              TOOL_SEARCH_BATCH_TOOL_NAME,
               TOOL_DESCRIBE_RAW_TOOL_NAME,
               TOOL_CALL_RAW_TOOL_NAME,
               "web_search",
@@ -313,6 +320,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           .tools.map((tool) => tool.name),
       ).toEqual([
         TOOL_SEARCH_RAW_TOOL_NAME,
+        TOOL_SEARCH_BATCH_TOOL_NAME,
         TOOL_DESCRIBE_RAW_TOOL_NAME,
         TOOL_CALL_RAW_TOOL_NAME,
         "message",
@@ -410,6 +418,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           .compactTools(
             tools([
               TOOL_SEARCH_RAW_TOOL_NAME,
+              TOOL_SEARCH_BATCH_TOOL_NAME,
               TOOL_DESCRIBE_RAW_TOOL_NAME,
               TOOL_CALL_RAW_TOOL_NAME,
               "web_search",
@@ -419,6 +428,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           .tools.map((tool) => tool.name),
       ).toEqual([
         TOOL_SEARCH_RAW_TOOL_NAME,
+        TOOL_SEARCH_BATCH_TOOL_NAME,
         TOOL_DESCRIBE_RAW_TOOL_NAME,
         TOOL_CALL_RAW_TOOL_NAME,
         "message",

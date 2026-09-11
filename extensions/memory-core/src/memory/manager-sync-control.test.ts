@@ -1,10 +1,20 @@
 // Memory Core tests cover manager sync control plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   MemorySessionSyncTarget,
   MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
-import { enqueueMemoryTargetedSessionSync } from "./manager-sync-control.js";
+import { enqueueMemoryTargetedSessionSync, MemoryWatchSyncQueue } from "./manager-sync-control.js";
+
+function createWatchSyncHarness(syncing: Promise<void>) {
+  const sync = vi.fn(async (_params?: MemorySyncParams) => {});
+  const queue = new MemoryWatchSyncQueue(() => syncing, sync);
+  return {
+    queue,
+    sync,
+  };
+}
 
 function createQueuedSyncHarness(params: { syncing: Promise<void>; archiveFiles?: string[] }) {
   let closed = false;
@@ -49,6 +59,150 @@ function createQueuedSyncHarness(params: { syncing: Promise<void>; archiveFiles?
 }
 
 describe("memory manager sync control", () => {
+  it("preserves force and fans out progress while coalescing full watch requests", async () => {
+    const active = createDeferred<void>();
+    const harness = createWatchSyncHarness(active.promise);
+    const firstProgress = vi.fn();
+    const secondProgress = vi.fn();
+    const queued = harness.queue.enqueue({ reason: "watch", progress: firstProgress });
+    expect(harness.queue.enqueue({ reason: "watch", force: true, progress: secondProgress })).toBe(
+      queued,
+    );
+    expect(harness.queue.enqueue({ reason: "watch", progress: firstProgress })).toBe(queued);
+    active.resolve();
+    await queued;
+
+    expect(harness.sync).toHaveBeenCalledOnce();
+    const params = harness.sync.mock.calls[0]?.[0];
+    expect(params).toEqual({ reason: "watch", force: true, progress: expect.any(Function) });
+    const update = { completed: 1, total: 2, label: "Indexing memory files" };
+    params?.progress?.(update);
+    expect(firstProgress).toHaveBeenCalledExactlyOnceWith(update);
+    expect(secondProgress).toHaveBeenCalledExactlyOnceWith(update);
+  });
+
+  it.each(["full", "targeted"] as const)(
+    "unions targeted watch requests without narrowing full work (%s arrives first)",
+    async (firstScope) => {
+      const active = createDeferred<void>();
+      const harness = createWatchSyncHarness(active.promise);
+      const firstProgress = vi.fn();
+      const secondProgress = vi.fn();
+      const full: MemorySyncParams = { reason: "watch", force: true };
+      const targeted: MemorySyncParams = {
+        reason: "watch",
+        sessions: [{ agentId: " main ", sessionId: " first " }],
+        archiveFiles: [" archive.jsonl "],
+        progress: firstProgress,
+      };
+      const ordered = firstScope === "full" ? [full, targeted] : [targeted, full];
+      const queued = harness.queue.enqueue(ordered[0]);
+      expect(harness.queue.enqueue(ordered[1])).toBe(queued);
+      expect(
+        harness.queue.enqueue({
+          reason: "watch",
+          force: true,
+          sessions: [{ agentId: "main", sessionId: "first" }, { sessionId: "second" }],
+          archiveFiles: ["archive.jsonl", "second.jsonl", " "],
+          progress: secondProgress,
+        }),
+      ).toBe(queued);
+      active.resolve();
+      await queued;
+
+      expect(harness.sync).toHaveBeenCalledTimes(2);
+      const requests = harness.sync.mock.calls.map(([params]) => params);
+      const fullIndex = firstScope === "full" ? 0 : 1;
+      expect(requests[fullIndex]).toEqual(full);
+      const targetedParams = requests[1 - fullIndex];
+      expect(targetedParams).toEqual({
+        reason: "watch",
+        force: true,
+        sessions: [{ agentId: "main", sessionId: "first" }, { sessionId: "second" }],
+        archiveFiles: ["archive.jsonl", "second.jsonl"],
+        progress: expect.any(Function),
+      });
+      const update = { completed: 1, total: 2 };
+      targetedParams?.progress?.(update);
+      expect(firstProgress).toHaveBeenCalledExactlyOnceWith(update);
+      expect(secondProgress).toHaveBeenCalledExactlyOnceWith(update);
+    },
+  );
+
+  it.each([
+    { arrival: false, close: false, followUpFails: false, calls: 1 },
+    { arrival: true, close: false, followUpFails: false, calls: 2 },
+    { arrival: true, close: false, followUpFails: true, calls: 2 },
+    { arrival: true, close: true, followUpFails: false, calls: 1 },
+  ])("settles failed watch work with $arrival/$close/$followUpFails", async (scenario) => {
+    const failure = new Error("watch sync failed");
+    const blocked = createDeferred<void>();
+    const harness = createWatchSyncHarness(Promise.resolve());
+    harness.sync.mockReturnValueOnce(blocked.promise);
+    if (scenario.followUpFails) {
+      harness.sync.mockRejectedValueOnce(new Error("follow-up sync failed"));
+    }
+    const queued = harness.queue.enqueue();
+    const settled = expect(queued).rejects.toBe(failure);
+    await vi.waitFor(() => expect(harness.sync).toHaveBeenCalledTimes(1));
+
+    if (scenario.arrival) {
+      expect(harness.queue.enqueue()).toBe(queued);
+    }
+    const closing = scenario.close ? harness.queue.close() : undefined;
+    blocked.reject(failure);
+    await settled;
+    await closing;
+
+    expect(harness.sync).toHaveBeenCalledTimes(scenario.calls);
+    expect(harness.queue.active).toBe(false);
+    if (!scenario.close) {
+      await harness.queue.enqueue();
+      expect(harness.sync).toHaveBeenCalledTimes(scenario.calls + 1);
+    }
+  });
+
+  it("runs another watch pass when a change arrives during the queued follow-up", async () => {
+    let releaseActive = () => {};
+    const active = new Promise<void>((resolve) => {
+      releaseActive = resolve;
+    });
+    let releaseFollowUp = () => {};
+    const followUp = new Promise<void>((resolve) => {
+      releaseFollowUp = resolve;
+    });
+    const harness = createWatchSyncHarness(active);
+    harness.sync.mockReturnValueOnce(followUp).mockResolvedValueOnce(undefined);
+
+    const first = harness.queue.enqueue();
+    releaseActive();
+    await vi.waitFor(() => expect(harness.sync).toHaveBeenCalledTimes(1));
+
+    const second = harness.queue.enqueue();
+    expect(second).toBe(first);
+    releaseFollowUp();
+    await first;
+
+    expect(harness.sync).toHaveBeenCalledTimes(2);
+    expect(harness.queue.active).toBe(false);
+  });
+
+  it("releases a queued watch request when the manager closes", async () => {
+    let releaseActive = () => {};
+    const active = new Promise<void>((resolve) => {
+      releaseActive = resolve;
+    });
+    const harness = createWatchSyncHarness(active);
+
+    const queued = harness.queue.enqueue();
+    const closed = harness.queue.close();
+    releaseActive();
+    await Promise.all([queued, closed]);
+
+    expect(harness.sync).not.toHaveBeenCalled();
+    expect(harness.queue.active).toBe(false);
+  });
+
   it("queues targeted session files behind an in-flight sync", async () => {
     let releaseSync = () => {};
     const pendingSync = new Promise<void>((resolve) => {

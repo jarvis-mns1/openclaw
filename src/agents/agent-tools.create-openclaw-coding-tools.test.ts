@@ -302,6 +302,7 @@ describe("createOpenClawCodingTools", () => {
 
     expect(names.has("tool_search_code")).toBe(false);
     expect(names.has("tool_search")).toBe(false);
+    expect(names.has("tool_search_batch")).toBe(false);
     expect(names.has("tool_describe")).toBe(false);
     expect(names.has("tool_call")).toBe(false);
   });
@@ -492,6 +493,7 @@ describe("createOpenClawCodingTools", () => {
 
     expect(names.has("tool_search_code")).toBe(true);
     expect(names.has("tool_search")).toBe(true);
+    expect(names.has("tool_search_batch")).toBe(true);
     expect(names.has("tool_describe")).toBe(true);
     expect(names.has("tool_call")).toBe(true);
   });
@@ -510,6 +512,7 @@ describe("createOpenClawCodingTools", () => {
 
     expect(names.has("tool_search_code")).toBe(true);
     expect(names.has("tool_search")).toBe(true);
+    expect(names.has("tool_search_batch")).toBe(true);
     expect(names.has("tool_describe")).toBe(true);
     expect(names.has("tool_call")).toBe(true);
     expect(names.has("message")).toBe(false);
@@ -531,26 +534,30 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("exec")).toBe(false);
     expect(names.has("tool_search_code")).toBe(true);
     expect(names.has("tool_search")).toBe(true);
+    expect(names.has("tool_search_batch")).toBe(true);
     expect(names.has("tool_describe")).toBe(true);
     expect(names.has("tool_call")).toBe(true);
   });
 
-  it("lets explicit deny policies remove Tool Search controls", () => {
-    const tools = createOpenClawCodingTools({
-      includeToolSearchControls: true,
-      config: {
-        tools: {
-          profile: "coding",
-          deny: ["tool_search_code"],
-          toolSearch: true,
+  it.each(["tool_search_code", "tool_search_batch"])(
+    "lets explicit deny policies remove %s",
+    (name) => {
+      const tools = createOpenClawCodingTools({
+        includeToolSearchControls: true,
+        config: {
+          tools: {
+            profile: "coding",
+            deny: [name],
+            toolSearch: true,
+          },
         },
-      },
-    });
-    const names = new Set(tools.map((tool) => tool.name));
+      });
+      const names = new Set(tools.map((tool) => tool.name));
 
-    expect(names.has("tool_search_code")).toBe(false);
-    expect(names.has("read")).toBe(true);
-  });
+      expect(names.has(name)).toBe(false);
+      expect(names.has("read")).toBe(true);
+    },
+  );
 
   it("keeps Tool Search controls when core OpenClaw tools are not materialized", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
@@ -577,6 +584,7 @@ describe("createOpenClawCodingTools", () => {
     expect(createOpenClawToolsMock).not.toHaveBeenCalled();
     expect(names.has("tool_search_code")).toBe(true);
     expect(names.has("tool_search")).toBe(true);
+    expect(names.has("tool_search_batch")).toBe(true);
     expect(names.has("tool_describe")).toBe(true);
     expect(names.has("tool_call")).toBe(true);
     expect(names.has("message")).toBe(false);

@@ -25,6 +25,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SessionStartupCatchupHarness,
   emitSessionTranscriptUpdate,
+  emitSessionIdentityMutationForTest,
   restoreStartupEnv,
   setStartupConfigPath,
   setStartupStateDir,
@@ -676,6 +677,106 @@ describe("session startup catch-up", () => {
     } finally {
       harness.stopTranscriptListener();
       timerObserver.mockRestore();
+    }
+  });
+
+  it("reconciles the previous SQLite generation after a session identity replacement", async () => {
+    vi.useFakeTimers();
+    const session = await writeSqliteSession({
+      sessionId: "previous-thread",
+      sessionKey: "agent:main:matrix:channel:thread",
+      content: "previous generation memory",
+    });
+    const replacementSessionId = "replacement-thread";
+    const replacementCorpusPath = `sessions/main/${replacementSessionId}.jsonl`;
+    const harness = new SessionStartupCatchupHarness(
+      [{ path: session.corpusPath, hash: "previous-hash", mtime: 10, size: 20 }],
+      true,
+      true,
+    );
+
+    expect(harness.getIndexedSourceState(session.corpusPath)).toBeDefined();
+    harness.startTranscriptListener();
+
+    try {
+      await upsertSessionEntry({
+        agentId: "main",
+        sessionKey: session.sessionKey,
+        storePath: session.storePath,
+        entry: {
+          sessionId: replacementSessionId,
+          updatedAt: 20,
+        },
+      });
+      await appendSessionTranscriptMessageByIdentity({
+        agentId: "main",
+        sessionId: replacementSessionId,
+        sessionKey: session.sessionKey,
+        storePath: session.storePath,
+        cwd: stateDir,
+        message: { role: "user", content: "replacement generation memory" },
+      });
+      await publishSessionTranscriptUpdateByIdentity({
+        ...session,
+        sessionId: replacementSessionId,
+      });
+
+      await vi.advanceTimersByTimeAsync(6000);
+      await harness.waitForSessionSync();
+
+      // This harness indexes the corpus directly, so require replacement admission too:
+      // a plain transcript notification must not accidentally satisfy the pruning assertion.
+      expect(harness.syncCalls).toContainEqual({ reason: "session-reconcile" });
+      expect(harness.getIndexedSourceState(session.corpusPath)).toBeUndefined();
+      expect(harness.indexedPaths).toContain(replacementCorpusPath);
+    } finally {
+      harness.stopTranscriptListener();
+    }
+  });
+
+  it.each([
+    { sessionKey: "global", agentId: "main", reconcile: true },
+    { sessionKey: "global", agentId: "other", reconcile: false },
+    { sessionKey: "agent:main:chat:thread", agentId: "other", reconcile: true },
+    { sessionKey: "agent:other:chat:thread", agentId: "main", reconcile: false },
+  ])(
+    "scopes replacement for $sessionKey to its canonical owner (operation=$agentId)",
+    async ({ sessionKey, agentId, reconcile }) => {
+      vi.useFakeTimers();
+      const harness = new SessionStartupCatchupHarness([]);
+      harness.startTranscriptListener();
+      try {
+        emitSessionIdentityMutationForTest({
+          agentId,
+          kind: "replace",
+          previous: { sessionKeys: [sessionKey] },
+          current: { sessionKeys: [sessionKey] },
+        });
+        await vi.advanceTimersByTimeAsync(6000);
+        await harness.waitForSessionSync();
+        expect(harness.syncCalls).toEqual(reconcile ? [{ reason: "session-reconcile" }] : []);
+      } finally {
+        harness.stopTranscriptListener();
+      }
+    },
+  );
+
+  it("does not reconcile the corpus for a newly created session identity", async () => {
+    vi.useFakeTimers();
+    const harness = new SessionStartupCatchupHarness([], true, true);
+    harness.startTranscriptListener();
+
+    try {
+      await writeSqliteSession({
+        sessionId: "new-thread",
+        sessionKey: "agent:main:matrix:channel:new-thread",
+      });
+      await vi.advanceTimersByTimeAsync(6000);
+      await harness.waitForSessionSync();
+
+      expect(harness.syncCalls).toEqual([]);
+    } finally {
+      harness.stopTranscriptListener();
     }
   });
 

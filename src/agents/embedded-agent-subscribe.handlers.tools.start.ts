@@ -6,6 +6,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { emitAgentActivityEvent, type AgentItemEventData } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-channel-summary.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
@@ -292,6 +293,32 @@ export function emitAgentEventCallbackBestEffort(
   });
 }
 
+export function emitToolHandlerAgentEvent(
+  ctx: ToolHandlerContext,
+  event: Pick<Parameters<typeof emitAgentEvent>[0], "stream" | "data">,
+): void {
+  const origin = ctx.toolEventOrigin;
+  if (origin?.isControlUiVisible === false) {
+    const current = getAgentRunContext(ctx.params.runId);
+    // Without the original hidden context the bus would default to visible.
+    // Drop late observer traffic; channel delivery callbacks remain independent.
+    if (
+      current?.isControlUiVisible !== false ||
+      current.lifecycleGeneration !== origin.lifecycleGeneration
+    ) {
+      return;
+    }
+  }
+  const owner = origin ?? ctx.params;
+  emitAgentEvent({
+    ...event,
+    runId: ctx.params.runId,
+    ...(owner.sessionKey ? { sessionKey: owner.sessionKey } : {}),
+    ...(owner.agentId ? { agentId: owner.agentId } : {}),
+    ...(origin ? { lifecycleGeneration: origin.lifecycleGeneration } : {}),
+  });
+}
+
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
   const normalized = normalizeOptionalLowercaseString(toolName);
   if (normalized !== "exec" && normalized !== "bash") {
@@ -487,8 +514,7 @@ export function handleToolExecutionStart(
     );
 
     const shouldEmitToolEvents = ctx.shouldEmitToolResult();
-    emitAgentEvent({
-      runId: ctx.params.runId,
+    emitToolHandlerAgentEvent(ctx, {
       stream: "tool",
       data: {
         phase: "start",

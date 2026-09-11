@@ -6059,6 +6059,85 @@ describe("agent event handler", () => {
     });
   });
 
+  it.each(["clear", "release"] as const)(
+    "routes subscribed tool and plan producers to their original agent after context %s",
+    async (cleanup) => {
+      const runId = "run-subscribed-owned-tools";
+      const sessionKey = "agent:work:original";
+      const agentId = "work";
+      const resolveSessionKeyForRun = vi.fn(
+        (_runId: string, options?: { agentId?: string }) =>
+          `agent:${options?.agentId ?? "main"}:replacement`,
+      );
+      const { broadcast, broadcastToConnIds, toolEventRecipients, handler } = createHarness({
+        resolveSessionKeyForRun,
+      });
+      const claimId = claimAgentRunContext(
+        runId,
+        { agentId, sessionKey },
+        { trackOwner: true, ownsContext: true },
+      );
+      const { emit, subscription } = createSubscribedSessionHarness({ runId, agentId, sessionKey });
+      if (cleanup === "clear") {
+        clearRegisteredAgentRunContext(runId);
+      }
+      releaseAgentRunContext(runId, claimId);
+      registerAgentRunContext("replacement-run", {
+        agentId: "main",
+        sessionKey: "agent:main:replacement",
+      });
+      toolEventRecipients.add(runId, "conn-work");
+      toolEventRecipients.add("replacement-run", "conn-main");
+      const stop = onAgentRuntimeEvent(handler);
+      try {
+        const toolName = "progress_card";
+        const toolCallId = "subscribed-owned-card";
+        const args = {
+          markdown: "Inspecting",
+          plan: [{ step: "Inspect", status: "in_progress" }],
+        };
+        emit({ type: "tool_execution_start", toolName, toolCallId, args });
+        emit({
+          type: "tool_execution_update",
+          toolName,
+          toolCallId,
+          args,
+          partialResult: { content: [{ type: "text", text: "fixture-progress" }] },
+        });
+        emit({
+          type: "tool_execution_end",
+          toolName,
+          toolCallId,
+          isError: false,
+          result: { content: [{ type: "text", text: "fixture-result" }] },
+        });
+        await subscription.waitForPendingEvents();
+
+        const tools = broadcastToConnIds.mock.calls.filter(
+          ([eventName, payload]) => eventName === "agent" && payload.stream === "tool",
+        );
+        expect(tools.map(([, payload]) => payload.data.phase)).toEqual([
+          "start",
+          "update",
+          "result",
+        ]);
+        for (const [, payload, recipients, options] of tools) {
+          expect(payload).toMatchObject({ runId, sessionKey, agentId });
+          expect(recipients).toEqual(new Set(["conn-work"]));
+          expect(options.sessionKeys).toEqual([sessionKey]);
+        }
+        const plans = agentBroadcastCalls(broadcast).filter(([, event]) => event.stream === "plan");
+        expect(plans).toHaveLength(1);
+        expect(plans[0]?.[1]).toMatchObject({ runId, sessionKey, agentId });
+        expect(plans[0]?.[2]).toMatchObject({ sessionKeys: [sessionKey] });
+        expect(resolveSessionKeyForRun).not.toHaveBeenCalled();
+      } finally {
+        stop();
+        subscription.unsubscribe();
+      }
+    },
+  );
+
   it.each([
     ["assistant", { text: "owned reply", delta: "owned reply", phase: "commentary" }],
     ["tool", { phase: "start", name: "read", toolCallId: "owned-tool" }],

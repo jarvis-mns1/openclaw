@@ -156,18 +156,21 @@ describe("buildToolSearchRunPlan", () => {
     expect(plan.hasCallableTools).toBe(false);
   });
 
-  it("keeps explicitly requested Tool Search controls callable", () => {
-    const plan = buildToolSearchRunPlan({
-      visibleTools: [{ name: "tool_search_code" }] as never,
-      uncompactedTools: [{ name: "tool_search_code" }] as never,
-      clientToolsCataloged: true,
-      catalogToolCount: 0,
-      controlsEnabled: true,
-      explicitAllowlistSources: [{ entries: ["tool_search_code"] }],
-    });
+  it.each(["tool_search_code", "tool_search_batch"])(
+    "keeps explicitly requested %s callable",
+    (name) => {
+      const plan = buildToolSearchRunPlan({
+        visibleTools: [{ name }] as never,
+        uncompactedTools: [{ name }] as never,
+        clientToolsCataloged: true,
+        catalogToolCount: 0,
+        controlsEnabled: true,
+        explicitAllowlistSources: [{ entries: [name] }],
+      });
 
-    expect(plan.hasCallableTools).toBe(true);
-  });
+      expect(plan.hasCallableTools).toBe(true);
+    },
+  );
 
   it("keeps uncataloged directory-mode client tools visible", () => {
     const plan = buildToolSearchRunPlan({

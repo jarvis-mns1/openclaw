@@ -707,6 +707,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerWatchResources 
         if (this.closed) {
           return;
         }
+        this.dirty = true;
         await this.sync({ reason: "watch" });
       }, "watch");
     }, this.settings.sync.watchDebounceMs);

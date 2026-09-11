@@ -1,7 +1,6 @@
 // Tool search tests cover catalog compaction, scoped tool lookup, raw fallback
 // tools, hooks, abort wrapping, and transcript projection.
 
-import { validateToolArguments } from "@openclaw/ai/validation";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
@@ -47,6 +46,7 @@ import {
   resolveToolSearchCatalogTool as resolveRunToolSearchCatalogTool,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_BATCH_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
@@ -232,11 +232,17 @@ describe("Tool Search", () => {
     createToolSearchTools({}).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
     "tool_search test invariant",
   );
+  const batchSearchTool = expectDefined(
+    createToolSearchTools({}).find((tool) => tool.name === TOOL_SEARCH_BATCH_TOOL_NAME),
+    "tool_search_batch test invariant",
+  );
 
   it.each([
     { limit: undefined, valid: true },
     { limit: 1, valid: true },
-    { limit: 50, valid: true },
+    { limit: 20, valid: true },
+    { limit: 21, valid: false },
+    { limit: 50, valid: false },
     { limit: 5.5, valid: false },
     { limit: 0, valid: false },
     { limit: -1, valid: false },
@@ -245,32 +251,44 @@ describe("Tool Search", () => {
     expect(Value.Check(limitSearchTool.parameters, input)).toBe(valid);
   });
 
-  it("accepts bounded structured batch queries in the tool schema", () => {
-    expect(JSON.stringify(limitSearchTool.parameters)).toContain(
-      "serialized query strings may use at most 512 UTF-8 bytes in total",
+  it("rejects ambiguous scalar calls after provider schema closure is stripped", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [pluginTool("fake_calendar", "calendar scheduling")],
+    });
+    const searchTool = expectDefined(
+      createToolSearchTools({ catalogRef }).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
+      "catalog-backed tool_search test invariant",
     );
-    expect(
-      Value.Check(limitSearchTool.parameters, {
-        queries: [
-          { query: "today's calendar events", limit: 3 },
-          { query: "Slack messages needing attention", limit: 3 },
-        ],
+    const finalizedSearchTool = expectDefined(
+      finalizeAgentTools({
+        tools: [searchTool],
+        modelCompat: { unsupportedToolSchemaKeywords: ["additionalProperties"] },
+        hookContext: {},
+        wrapBeforeToolCallHook: false,
+      })[0],
+      "finalized tool_search test invariant",
+    );
+    const mixedInput = {
+      query: "calendar",
+      limit: 1,
+      queries: [{ query: "Slack" }],
+      options: { limit: 20 },
+      legacy: true,
+    };
+
+    expect(finalizedSearchTool.parameters).not.toHaveProperty("additionalProperties");
+    expect(Value.Check(finalizedSearchTool.parameters, mixedInput)).toBe(true);
+    await expect(finalizedSearchTool.execute("call-normalized-scalar", mixedInput)).rejects.toThrow(
+      "Use tool_search_batch with queries",
+    );
+    expect(catalogRef.current?.searchCount).toBe(0);
+    await expect(
+      finalizedSearchTool.execute("call-normalized-batch", {
+        queries: [{ query: "calendar", limit: 1 }],
       }),
-    ).toBe(true);
-    // Argument validation runs before execute; the parser owns empty/null handling.
-    for (const input of [
-      { queries: [] },
-      { query: null, queries: [{ query: "calendar" }] },
-      { query: "calendar", queries: [] },
-      { query: "calendar", queries: null },
-    ]) {
-      expect(Value.Check(limitSearchTool.parameters, input)).toBe(true);
-    }
-    expect(
-      Value.Check(limitSearchTool.parameters, {
-        queries: Array.from({ length: 17 }, (_, index) => ({ query: `query ${index}`, limit: 1 })),
-      }),
-    ).toBe(false);
+    ).rejects.toThrow("query must be a string");
   });
 
   it.each([5.5, 0, -1])("rejects runtime limit %s", async (limit) => {
@@ -279,40 +297,14 @@ describe("Tool Search", () => {
     );
   });
 
-  it.each([
-    {
-      label: "missing request",
-      input: {},
-      error: "provide query or queries",
+  it.each([{}, { query: null }, { queries: [{ query: "calendar" }] }])(
+    "requires a scalar query at execution: %j",
+    async (input) => {
+      await expect(limitSearchTool.execute("call-invalid-scalar", input)).rejects.toThrow(
+        "query must be a string",
+      );
     },
-    {
-      label: "null request",
-      input: { query: null, queries: null },
-      error: "provide query or queries",
-    },
-    {
-      label: "empty batch",
-      input: { queries: [] },
-      error: "queries must be a non-empty array",
-    },
-    {
-      label: "empty batch beside an empty query",
-      input: { query: "", queries: [] },
-      error: "queries must be a non-empty array",
-    },
-    {
-      label: "empty batch query",
-      input: { queries: [{ query: "  " }] },
-      error: "queries[0].query must be a non-empty string",
-    },
-    {
-      label: "top-level batch limit",
-      input: { queries: [{ query: "calendar" }], limit: 1 },
-      error: "set limit on each batch query",
-    },
-  ])("rejects $label", async ({ input, error }) => {
-    await expect(limitSearchTool.execute("call-invalid-batch", input)).rejects.toThrow(error);
-  });
+  );
 
   it.each(["", "  "])("preserves scalar empty-query compatibility for %j", async (query) => {
     expect(Value.Check(limitSearchTool.parameters, { query })).toBe(true);
@@ -337,7 +329,7 @@ describe("Tool Search", () => {
         config: {
           tools: { toolSearch: { enabled: true, mode: "tools", maxSearchLimit: 50 } },
         } as never,
-      }).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
+      }).find((tool) => tool.name === TOOL_SEARCH_BATCH_TOOL_NAME),
       "batch budget search tool",
     );
 
@@ -380,12 +372,12 @@ describe("Tool Search", () => {
       searchTool.execute("call-long-query", { query: longScalarQuery }),
     ).resolves.toBeDefined();
     await expect(
-      limitSearchTool.execute("call-long-batch-query", {
+      batchSearchTool.execute("call-long-batch-query", {
         queries: [{ query: "q".repeat(512) }, { query: "r" }],
       }),
     ).rejects.toThrow("serialized batch query text may use at most 512 UTF-8 bytes");
     await expect(
-      limitSearchTool.execute("call-multibyte-batch-query", {
+      batchSearchTool.execute("call-multibyte-batch-query", {
         queries: [{ query: "😀".repeat(128) }],
       }),
     ).rejects.toThrow("serialized batch query text may use at most 512 UTF-8 bytes");
@@ -405,132 +397,6 @@ describe("Tool Search", () => {
     );
 
     await expect(searchTool.execute("call-unicode-query", { query })).resolves.toBeDefined();
-  });
-
-  function validatedSearchFixture() {
-    const catalogRef = createToolSearchCatalogRef();
-    registerHeadlessToolSearchCatalog({
-      catalogRef,
-      tools: [
-        pluginTool("fake_calendar", "calendar events surface"),
-        pluginTool("fake_slack_messages", "Slack messages surface"),
-        pluginTool("fake_slack_channels", "Slack channels surface"),
-        pluginTool("fake_slack_users", "Slack users surface"),
-      ],
-    });
-    const searchTool = expectDefined(
-      createToolSearchTools({
-        catalogRef,
-        config: {
-          tools: { toolSearch: { mode: "tools", searchDefaultLimit: 2, maxSearchLimit: 50 } },
-        },
-      }).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
-      "validated search tool",
-    );
-    const execute = async (input: Record<string, unknown>) => {
-      const args = validateToolArguments(searchTool, {
-        type: "toolCall",
-        id: "call-validated-search",
-        name: searchTool.name,
-        arguments: input,
-      });
-      return searchTool.execute("call-validated-search", args);
-    };
-    return { catalogRef, execute };
-  }
-
-  it("preserves scalar-first order and distinct limits for duplicate mixed queries", async () => {
-    const { catalogRef, execute } = validatedSearchFixture();
-    const scalar = await execute({ query: "Slack", limit: 1 });
-    const result = await execute({
-      query: " Slack ",
-      limit: 1,
-      queries: [
-        { query: "calendar", limit: 1 },
-        { query: "Slack", limit: 2 },
-        { query: "Slack", limit: 3 },
-      ],
-    });
-    expect(result.details).toEqual({
-      results: [
-        { query: "Slack", candidates: scalar.details },
-        { query: "calendar", candidates: [expect.objectContaining({ name: "fake_calendar" })] },
-        { query: "Slack", candidates: expect.any(Array) },
-        { query: "Slack", candidates: expect.any(Array) },
-      ],
-    });
-    const groups = resultDetails(result).results as Array<{ candidates: unknown[] }>;
-    expect(groups.map((group) => group.candidates.length)).toEqual([1, 1, 2, 3]);
-    expect(catalogRef.current?.searchCount).toBe(5);
-  });
-
-  it.each([undefined, null, "", "  "])(
-    "serves batch placeholders with scalar query %j through argument validation",
-    async (query) => {
-      const { execute } = validatedSearchFixture();
-      const expected = await execute({ queries: [{ query: "Slack", limit: 1 }] });
-      for (const limit of [undefined, null]) {
-        const result = await execute({ query, limit, queries: [{ query: "Slack", limit: 1 }] });
-        expect(result).toEqual(expected);
-      }
-    },
-  );
-
-  it.each([{ queries: undefined }, { queries: null }, { queries: [] }])(
-    "preserves scalar results beside batch placeholder $queries",
-    async ({ queries }) => {
-      const { execute } = validatedSearchFixture();
-      const expected = await execute({ query: "Slack" });
-      expect(Array.isArray(expected.details)).toBe(true);
-      expect(expected.details).toHaveLength(2);
-      expect(await execute({ query: "Slack", limit: null, queries })).toEqual(expected);
-    },
-  );
-
-  it.each([
-    {},
-    { query: null, limit: null, queries: null },
-    { query: null, limit: null, queries: [] },
-    { query: "", limit: null, queries: [] },
-    { query: "  ", limit: null, queries: [] },
-  ])("rejects missing searches after argument validation: %j", async (input) => {
-    const { catalogRef, execute } = validatedSearchFixture();
-    await expect(execute(input)).rejects.toThrow(/provide query or queries|non-empty array/);
-    expect(catalogRef.current?.searchCount).toBe(0);
-  });
-
-  it.each([1, 0, false, "", -1, 1.5, "invalid"])(
-    "does not discard non-null top-level batch limit %j",
-    async (limit) => {
-      const { catalogRef, execute } = validatedSearchFixture();
-      await expect(execute({ query: null, limit, queries: [{ query: "Slack" }] })).rejects.toThrow(
-        /Validation failed|set limit on each batch query/,
-      );
-      expect(catalogRef.current?.searchCount).toBe(0);
-    },
-  );
-
-  it.each([
-    {
-      input: { query: "Slack", limit: 25, queries: [{ query: "Slack", limit: 26 }] },
-      error: "resolve to 51 results",
-    },
-    {
-      input: {
-        query: "Slack",
-        limit: 1,
-        queries: Array.from({ length: 16 }, () => ({ query: "Slack", limit: 1 })),
-      },
-      error: "at most 16 entries",
-    },
-    {
-      input: { query: "é".repeat(127), limit: 1, queries: [{ query: "é".repeat(127), limit: 1 }] },
-      error: "at most 512 UTF-8 bytes",
-    },
-  ])("counts the scalar duplicate toward batch budgets: $error", async ({ input, error }) => {
-    const { catalogRef, execute } = validatedSearchFixture();
-    await expect(execute(input)).rejects.toThrow(error);
-    expect(catalogRef.current?.searchCount).toBe(0);
   });
 
   it("accepts the documented batch boundaries without deduplicating queries", async () => {
@@ -557,7 +423,7 @@ describe("Tool Search", () => {
     });
     const searchTool = expectDefined(
       createToolSearchTools({ config, catalogRef }).find(
-        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
+        (tool) => tool.name === TOOL_SEARCH_BATCH_TOOL_NAME,
       ),
       "boundary batch search tool",
     );
@@ -596,7 +462,7 @@ describe("Tool Search", () => {
     });
     const searchTool = expectDefined(
       createToolSearchTools({ config, catalogRef }).find(
-        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
+        (tool) => tool.name === TOOL_SEARCH_BATCH_TOOL_NAME,
       ),
       "atomic batch search tool",
     );
@@ -635,6 +501,13 @@ describe("Tool Search", () => {
       "bounded response search tool",
     );
 
+    const batchTool = expectDefined(
+      createToolSearchTools({ config, catalogRef }).find(
+        (tool) => tool.name === TOOL_SEARCH_BATCH_TOOL_NAME,
+      ),
+      "batch search control",
+    );
+
     const scalar = await searchTool.execute("call-full-scalar-description", {
       query: "fake_large_0",
       limit: 1,
@@ -650,7 +523,7 @@ describe("Tool Search", () => {
       (candidate) => candidate.id,
     );
 
-    const result = await searchTool.execute("call-bounded-response", {
+    const result = await batchTool.execute("call-bounded-response", {
       queries: Array.from({ length: 5 }, () => ({ query: "large surface", limit: 10 })),
     });
     const details = resultDetails(result);
@@ -669,7 +542,7 @@ describe("Tool Search", () => {
     }
 
     const manyGroups = resultDetails(
-      await searchTool.execute("call-bounded-many-groups", {
+      await batchTool.execute("call-bounded-many-groups", {
         queries: Array.from({ length: 16 }, () => ({ query: "large surface", limit: 1 })),
       }),
     );
@@ -707,7 +580,7 @@ describe("Tool Search", () => {
     });
     const searchTool = expectDefined(
       createToolSearchTools({ config, catalogRef }).find(
-        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
+        (tool) => tool.name === TOOL_SEARCH_BATCH_TOOL_NAME,
       ),
       "untrusted description search tool",
     );
@@ -753,7 +626,7 @@ describe("Tool Search", () => {
     addClientToolsToToolSearchCatalog({ tools: [clientTool], config, catalogRef });
     const searchTool = expectDefined(
       createToolSearchTools({ config, catalogRef }).find(
-        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
+        (tool) => tool.name === TOOL_SEARCH_BATCH_TOOL_NAME,
       ),
       "untrusted metadata search tool",
     );
@@ -822,6 +695,13 @@ describe("Tool Search", () => {
       "structured batch search tool",
     );
 
+    const batchTool = expectDefined(
+      createToolSearchTools({ config, catalogRef }).find(
+        (tool) => tool.name === TOOL_SEARCH_BATCH_TOOL_NAME,
+      ),
+      "batch search control",
+    );
+
     const scalar = await searchTool.execute("call-scalar-search", {
       query: "calendar events",
       limit: 1,
@@ -830,7 +710,7 @@ describe("Tool Search", () => {
       expect.objectContaining({ name: "fake_attention", source: "openclaw" }),
     ]);
 
-    const batch = await searchTool.execute("call-batch-search", {
+    const batch = await batchTool.execute("call-batch-search", {
       queries: [
         { query: "  calendar events  ", limit: 1 },
         { query: "Slack messages", limit: 1 },
@@ -870,7 +750,7 @@ describe("Tool Search", () => {
     });
     const searchTool = expectDefined(
       createToolSearchTools({ config, catalogRef }).find(
-        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
+        (tool) => tool.name === TOOL_SEARCH_BATCH_TOOL_NAME,
       ),
       "directory batch search tool",
     );
