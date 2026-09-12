@@ -12,6 +12,125 @@ export function hasTargetedSessionSyncParams(params: MemorySyncParams | undefine
   );
 }
 
+type PendingMemoryWatchSync = {
+  force: boolean;
+  sessions: Map<string, MemorySessionSyncTarget>;
+  archiveFiles: Set<string>;
+  progressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
+};
+
+export class MemoryWatchSyncQueue {
+  private queued: Promise<void> | null = null;
+  // A targeted session pass cannot satisfy full watch work, and an unscoped watch
+  // pass intentionally skips sessions. Merge only requests with the same scope.
+  private readonly pending = new Map<"full" | "targeted", PendingMemoryWatchSync>();
+  private closed = false;
+
+  constructor(
+    private readonly getSyncing: () => Promise<void> | null,
+    private readonly sync: (params: MemorySyncParams) => Promise<void>,
+  ) {}
+
+  get active(): boolean {
+    return this.queued !== null;
+  }
+
+  enqueue(params?: MemorySyncParams): Promise<void> {
+    if (this.closed) {
+      return Promise.resolve();
+    }
+    const scope = hasTargetedSessionSyncParams(params) ? "targeted" : "full";
+    let request = this.pending.get(scope);
+    if (!request) {
+      request = {
+        force: false,
+        sessions: new Map(),
+        archiveFiles: new Set(),
+        progressCallbacks: new Set(),
+      };
+      this.pending.set(scope, request);
+    }
+    request.force ||= params?.force === true;
+    for (const target of params?.sessions ?? []) {
+      const normalized = normalizeQueuedMemorySessionSyncTarget(target);
+      if (normalized) {
+        request.sessions.set(memorySessionSyncTargetKey(normalized), normalized);
+      }
+    }
+    for (const archiveFile of params?.archiveFiles ?? []) {
+      const trimmed = archiveFile.trim();
+      if (trimmed) {
+        request.archiveFiles.add(trimmed);
+      }
+    }
+    if (params?.progress) {
+      request.progressCallbacks.add(params.progress);
+    }
+    if (!this.queued) {
+      this.queued = this.drain();
+    }
+    return this.queued;
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+    this.pending.clear();
+    await this.queued?.catch(() => undefined);
+  }
+
+  private async drain(): Promise<void> {
+    let failure: { error: unknown } | undefined;
+    try {
+      const syncing = this.getSyncing();
+      if (syncing) {
+        await syncing.catch(() => undefined);
+      }
+      while (!this.closed && this.pending.size > 0) {
+        const next = this.pending.entries().next().value;
+        if (!next) {
+          break;
+        }
+        const [scope, request] = next;
+        this.pending.delete(scope);
+        const progressCallbacks = Array.from(request.progressCallbacks);
+        try {
+          await this.sync({
+            reason: "watch",
+            ...(request.force ? { force: true } : {}),
+            ...(scope === "targeted"
+              ? {
+                  sessions: Array.from(request.sessions.values()),
+                  archiveFiles: Array.from(request.archiveFiles),
+                }
+              : {}),
+            ...(progressCallbacks.length > 0
+              ? {
+                  progress: (update) => {
+                    for (const callback of progressCallbacks) {
+                      callback(update);
+                    }
+                  },
+                }
+              : {}),
+          });
+        } catch (error) {
+          // A failed pass must not strand arrivals sharing this queue owner.
+          // Drain only notified work, then preserve the failure for its callers.
+          failure ??= { error };
+        }
+      }
+      if (failure) {
+        throw failure.error;
+      }
+    } finally {
+      if (this.closed) {
+        this.pending.clear();
+      }
+      this.queued = null;
+    }
+  }
+}
+
 export function enqueueMemoryTargetedSessionSync(
   state: {
     isClosed: () => boolean;

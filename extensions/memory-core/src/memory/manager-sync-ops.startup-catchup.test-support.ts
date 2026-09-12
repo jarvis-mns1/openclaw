@@ -48,13 +48,26 @@ type MemorySessionTranscriptUpdate = {
   };
 };
 
+type MemorySessionIdentityMutation = {
+  agentId: string;
+  kind: "create" | "delete" | "move" | "replace" | "reset";
+  previous: { sessionKeys: readonly string[] };
+  current?: { sessionKeys: readonly string[] };
+};
+
 const originalStartupStateDir = process.env.OPENCLAW_STATE_DIR;
 const originalStartupConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 let transcriptUpdateListener: ((update: MemorySessionTranscriptUpdate) => void) | undefined;
+let identityMutationListener: ((mutation: MemorySessionIdentityMutation) => void) | undefined;
 
 /** Clears the module-owned listener between tests; ESM bindings cannot be reassigned by importers. */
 export function resetTranscriptUpdateListener(): void {
   transcriptUpdateListener = undefined;
+  identityMutationListener = undefined;
+}
+
+export function emitSessionIdentityMutationForTest(mutation: MemorySessionIdentityMutation): void {
+  identityMutationListener?.(mutation);
 }
 export const startupHarnessDatabases = new Set<DatabaseSync>();
 
@@ -293,14 +306,19 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
 
   protected override subscribeSessionTranscriptUpdates(
     listener: (update: MemorySessionTranscriptUpdate) => void,
+    identityListener: (mutation: MemorySessionIdentityMutation) => void,
   ): () => void {
     if (this.subscribeToRealEvents) {
-      return super.subscribeSessionTranscriptUpdates(listener);
+      return super.subscribeSessionTranscriptUpdates(listener, identityListener);
     }
     transcriptUpdateListener = listener;
+    identityMutationListener = identityListener;
     return () => {
       if (transcriptUpdateListener === listener) {
         transcriptUpdateListener = undefined;
+      }
+      if (identityMutationListener === identityListener) {
+        identityMutationListener = undefined;
       }
     };
   }

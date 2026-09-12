@@ -4,6 +4,8 @@ import { createInlineCodeState } from "../../packages/markdown-core/src/code-spa
  * Subscribes to embedded-agent sessions and streams formatted replies/events.
  */
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { captureAgentRunLifecycleGeneration } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
@@ -45,6 +47,14 @@ function resolveEmbeddedAgentSessionLogger(messageChannel?: string) {
 
 export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
   const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
+  // Queued tool handlers can outlive the registry context that supplied visibility.
+  const toolEventOrigin = {
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    lifecycleGeneration:
+      params.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(params.runId),
+    isControlUiVisible: getAgentRunContext(params.runId)?.isControlUiVisible ?? true,
+  };
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
   const state: EmbeddedAgentSubscribeState = createEmbeddedAgentSubscribeState(params);
@@ -377,6 +387,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
 
   const ctx: EmbeddedAgentSubscribeContext = {
     params,
+    toolEventOrigin,
     state,
     log,
     blockChunking,

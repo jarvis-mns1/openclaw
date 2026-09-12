@@ -93,10 +93,10 @@ normal policy, approval, hook, logging, and result handling still apply.
 
 - `code`: exposes `tool_search_code`, the default compact JavaScript bridge,
   alongside the capability directory and direct-only tools.
-- `tools`: exposes `tool_search`, `tool_describe`, and `tool_call` as plain
+- `tools`: exposes `tool_search`, `tool_search_batch`, `tool_describe`, and `tool_call` as plain
   structured tools for providers that should not receive code, alongside the
   capability directory and direct-only tools.
-- `directory`: exposes `tool_search`, `tool_describe`, and `tool_call` plus a
+- `directory`: exposes `tool_search`, `tool_search_batch`, `tool_describe`, and `tool_call` plus a
   bounded, cache-stable prompt directory. Core coding primitives, direct-only
   tools, and tools required by the run's delivery policy remain visible; other
   schemas stay deferred.
@@ -129,7 +129,7 @@ Tool Search changes the shape:
 - direct tools: the model sees every selected schema before the first token
 - Tool Search code mode: the model sees one compact code tool, a bounded
   capability directory, a short API contract, and any direct-only tools
-- Tool Search tools mode: the model sees three compact structured fallback
+- Tool Search tools mode: the model sees four compact structured fallback
   tools, the same capability directory, and any direct-only tools
 - Tool Search directory mode: the model sees a bounded directory plus
   search/describe/call controls, policy-required direct tools, and any
@@ -234,6 +234,7 @@ all non-throwing variants or omit it for unstable results. See
 The structured fallback mode exposes the same operations as tools:
 
 - `tool_search`
+- `tool_search_batch`
 - `tool_describe`
 - `tool_call`
 
@@ -243,8 +244,7 @@ mode. Put the result ID or name in `tool_call.id` and all target parameters in
 by name. A compact search signature may be enough to call it; use
 `tool_describe` when the full schema is needed.
 
-`tool_search` accepts either the existing single-query shape or a batch of
-independent queries:
+`tool_search` accepts one required string query and an optional result limit:
 
 ```json
 {
@@ -252,6 +252,8 @@ independent queries:
   "limit": 3
 }
 ```
+
+Use `tool_search_batch` for several independent searches in one call:
 
 ```json
 {
@@ -262,21 +264,25 @@ independent queries:
 }
 ```
 
-Single-query calls continue to return the compact candidate array directly.
-When both shapes contain searches, the non-empty `query` runs first, with the
-top-level `limit` scoped to it. Batch entries follow in request order, including
-repeated query text; each occurrence keeps its own limit and counts toward the
-batch budgets.
+Scalar calls return the compact candidate array directly. The scalar and batch
+schemas are separate closed objects: `tool_search` requires `query`, while
+`tool_search_batch` requires `queries` and sets limits on each entry. A blank
+scalar query still returns an empty candidate array. Missing or null scalar
+queries and null limits are rejected. The canonical closed schemas reject mixed
+scalar/batch fields. If provider schema cleanup removes object closure, the
+executor still rejects meaningful or malformed wrong-field values before any
+search: use `tool_search_batch` for a nonempty `queries` array, and put every
+batch search inside that array. For legacy payloads, scalar calls tolerate
+`queries: null` or `queries: []`; batch calls tolerate a null or blank top-level
+`query`. These placeholders do not add searches.
 
-Beside a non-empty batch, an omitted, `null`, empty, or whitespace-only `query`
-is ignored. In that case, omit the top-level `limit` or set it to `null`; a
-non-null top-level limit is rejected rather than applied to the batch.
-An omitted or `null` `queries` retains scalar behavior, and `queries: []` also
-falls back to the scalar shape when `query` is non-empty. A blank scalar query
-without a batch still returns an empty candidate array. A missing or `null`
-scalar with no batch, or an empty batch with no non-empty scalar, is rejected.
-A scalar `limit: null` uses the default limit, just like an omitted limit.
-Invalid query shapes, invalid limits, and over-budget batches still fail.
+The canonical batch schema requires 1–16 entries and query strings of 1–512
+characters. Some providers, including Gemini, remove item-count and string-length
+constraints during schema projection. The executor therefore checks those bounds
+again. A request accepted by such a projected
+schema can still return an actionable validation error. Nonblank query text,
+aggregate query bytes, and the total result budget are semantic runtime checks;
+schema acceptance alone does not guarantee that a batch is executable.
 
 Batch calls return `{ results: [{ query, candidates }] }` in request order. Each
 query uses the same effective catalog, ranking, filtering, and per-query limit
@@ -295,6 +301,7 @@ with no matches returns an empty `candidates` array.
 Directory mode exposes:
 
 - `tool_search`
+- `tool_search_batch`
 - `tool_describe`
 - `tool_call`
 
@@ -435,7 +442,7 @@ Code mode attaches a `telemetry` object to every `tool_search_code` result:
   session, carried across calls rather than reset per call
 
 `tools` and `directory` mode emit no telemetry object; their `tool_search`,
-`tool_describe`, and `tool_call` results carry only the catalog data for that
+`tool_search_batch`, `tool_describe`, and `tool_call` results carry only the catalog data for that
 operation. OpenClaw does not record serialized tool or prompt byte counts. The
 [E2E scenario](#e2e-validation) measures provider payload bytes separately from
 the mock provider lane, not from the runtime.
@@ -471,8 +478,10 @@ The regression proves:
 4. Tool Search exposes only the compact bridge plus any direct-only tools.
 5. The Tool Search request payload is smaller for the large fake catalog.
 6. Session logs show the expected tool-call counts and bridged call telemetry.
-7. Structured mode resolves two queries with one `tool_search` call before the
-   selected plugin tool runs through `tool_call`.
+7. Structured mode performs one scalar `tool_search`, resolves two independent
+   queries with one `tool_search_batch`, then invokes the selected plugin tool
+   through `tool_call`. The provider-visible batch schema retains its item bounds
+   in this mock OpenAI lane.
 
 ## Failure behavior
 

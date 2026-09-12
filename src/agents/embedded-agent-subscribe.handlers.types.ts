@@ -232,9 +232,17 @@ export type EmbeddedAgentSubscribeState = {
   lastAssistant?: AgentMessage;
 };
 
+type ToolEventOrigin = {
+  readonly agentId?: string;
+  readonly sessionKey?: string;
+  readonly lifecycleGeneration: string;
+  readonly isControlUiVisible: boolean;
+};
+
 /** Handler context bundling params, mutable state, emitters, and helper hooks. */
 export type EmbeddedAgentSubscribeContext = {
   params: SubscribeEmbeddedAgentSessionParams;
+  toolEventOrigin?: ToolEventOrigin;
   state: EmbeddedAgentSubscribeState;
   log: EmbeddedSubscribeLogger;
   blockChunking?: BlockReplyChunking;
@@ -392,6 +400,7 @@ type ToolHandlerState = Pick<
 
 export type ToolHandlerContext = {
   params: ToolHandlerParams;
+  toolEventOrigin?: ToolEventOrigin;
   state: ToolHandlerState;
   log: EmbeddedSubscribeLogger;
   hookRunner?: HookRunner;

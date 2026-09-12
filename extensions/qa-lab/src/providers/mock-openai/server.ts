@@ -194,7 +194,6 @@ import {
   extractToolSearchTarget,
   toolSearchOutputHasCandidate,
   buildQaToolSearchArgs,
-  QA_TOOL_SEARCH_SECONDARY_TARGET,
   isActiveMemorySubagentPrompt,
   isSnackRecallPrompt,
   extractSnackPreference,
@@ -1227,11 +1226,23 @@ async function buildResponsesPayload(
     if (
       targetTool &&
       hasCompletedToolOutput &&
-      completedToolName === "tool_search" &&
+      (completedToolName === "tool_search" || completedToolName === "tool_search_batch") &&
       !toolOutput.includes("FAKE_PLUGIN_OK") &&
       toolSearchOutputHasCandidate(parseToolOutputJson(toolOutput), targetTool) &&
       hasDeclaredTool(body, "tool_call")
     ) {
+      if (
+        completedToolName === "tool_search" &&
+        allInputText.includes("scalar-and-batch") &&
+        hasDeclaredTool(body, "tool_search_batch")
+      ) {
+        return buildToolCallEventsWithArgs("tool_search_batch", {
+          queries: [
+            { query: targetTool, limit: 1 },
+            { query: "fake plugin tool", limit: 2 },
+          ],
+        });
+      }
       return buildToolCallEventsWithArgs("tool_call", { id: targetTool, args: plannedArgs });
     }
     if (
@@ -1259,10 +1270,8 @@ async function buildResponsesPayload(
       hasDeclaredTool(body, "tool_search")
     ) {
       return buildToolCallEventsWithArgs("tool_search", {
-        queries: [
-          { query: targetTool, limit: 1 },
-          { query: QA_TOOL_SEARCH_SECONDARY_TARGET, limit: 1 },
-        ],
+        query: targetTool,
+        limit: 1,
       });
     }
     if (

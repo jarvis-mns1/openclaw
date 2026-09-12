@@ -28,6 +28,7 @@ import {
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
+  TOOL_SEARCH_BATCH_TOOL_NAME,
   resolveToolSearchConfig,
 } from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
@@ -737,6 +738,7 @@ describe("Code Mode catalog and model-visible surface", () => {
         ...codeModeTools,
         fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "legacy code surface"),
         fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "legacy search"),
+        fakeTool(TOOL_SEARCH_BATCH_TOOL_NAME, "legacy batch search"),
         fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "legacy describe"),
         fakeTool(TOOL_CALL_RAW_TOOL_NAME, "legacy call"),
         pluginTool("fake_create_ticket", "Create a fake ticket"),
