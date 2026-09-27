@@ -289,6 +289,9 @@ describe("copilotToolMetasHavePotentialSideEffects", () => {
     );
     expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "sessions_list" }])).toBe(false);
     expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "tool_search" }])).toBe(false);
+    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "tool_search_batch" }])).toBe(
+      false,
+    );
     expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "web_fetch" }])).toBe(false);
     expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "web_search" }])).toBe(false);
   });

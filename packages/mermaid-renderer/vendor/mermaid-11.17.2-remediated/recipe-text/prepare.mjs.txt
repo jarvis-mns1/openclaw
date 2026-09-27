@@ -1,0 +1,60 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { copyFile, lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const commit = 'dcb694ddb58dc5ad3502e7e903cac05fd812eac3';
+const recipe = path.dirname(fileURLToPath(import.meta.url));
+const source = path.dirname(recipe);
+const destination = path.resolve(process.argv[2] ?? '');
+assert(process.argv[2], 'Pass a new isolated build directory outside this source checkout');
+assert(!destination.startsWith(`${source}/`), 'Build context must be outside the source checkout');
+await assert.rejects(lstat(destination), { code: 'ENOENT' });
+const git = (...args) => execFileSync('/usr/bin/git', ['-c', 'core.hooksPath=/dev/null', '-c', 'credential.helper=', ...args], {
+  cwd: source, maxBuffer: 128 * 1024 * 1024,
+  env: { PATH: '/usr/bin:/bin', HOME: '/private/tmp', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_NO_LAZY_FETCH: '1' },
+});
+assert.equal(git('rev-parse', 'HEAD').toString().trim(), commit);
+const entries = git('ls-tree', '-r', '-z', commit).toString().split('\0').filter(Boolean).map((entry) => {
+  const separator = entry.indexOf('\t');
+  assert(separator > 0);
+  const [mode, type, blob] = entry.slice(0, separator).split(' ');
+  const file = entry.slice(separator + 1);
+  return { mode, type, blob, file };
+}).filter(({ file }) =>
+  ['LICENSE', 'tsconfig.json', 'packages/mermaid/package.json', 'packages/mermaid/tsconfig.json',
+    'packages/parser/package.json', 'packages/parser/tsconfig.json', 'packages/parser/langium-config.json'].includes(file)
+  || ['.build/common.ts', '.build/generateLangium.ts', '.build/jisonTransformer.ts', '.build/jsonSchema.ts',
+    '.esbuild/util.ts', '.esbuild/jisonPlugin.ts', '.esbuild/jsonSchemaPlugin.ts'].includes(file)
+  || /^packages\/(?:mermaid|parser)\/src\//.test(file) && !file.includes('/src/docs/')
+);
+assert(entries.length > 100);
+const verified = [];
+for (const entry of entries) {
+  assert.equal(entry.type, 'blob');
+  assert(['100644', '100755'].includes(entry.mode), `Refuse symlink or unknown mode: ${entry.file}`);
+  const bytes = await readFile(path.join(source, entry.file));
+  const blob = createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+  assert.equal(blob, entry.blob, `Working file differs from exact commit: ${entry.file}`);
+  verified.push({ ...entry, bytes });
+}
+await mkdir(destination, { recursive: true, mode: 0o700 });
+for (const { file, bytes, mode } of verified) {
+  await mkdir(path.dirname(path.join(destination, file)), { recursive: true });
+  await writeFile(path.join(destination, file), bytes, { mode: mode === '100755' ? 0o755 : 0o644 });
+}
+for (const file of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'build.mts', 'generate-parser.mjs']) {
+  await copyFile(path.join(recipe, file), path.join(destination, file));
+}
+await mkdir(path.join(destination, 'patches'));
+await copyFile(path.join(recipe, 'patches/roughjs.patch'), path.join(destination, 'patches/roughjs.patch'));
+const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const receipt = {
+  sourceCommit: commit, sourceManifestSha256: digest(JSON.stringify(entries)), paths: entries,
+  recipeFiles: Object.fromEntries(await Promise.all(['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'build.mts', 'generate-parser.mjs', 'patches/roughjs.patch'].map(async (file) => [file, digest(await readFile(path.join(recipe, file)))]))),
+  note: 'Every source byte verified against its exact Git commit blob before copying. No install or lifecycle execution. No root upstream package manifest/workspace hooks copied.',
+};
+await writeFile(path.join(destination, 'source-receipt.json'), `${JSON.stringify(receipt, null, 2)}\n`);
+console.log(JSON.stringify({ destination, sourceCommit: commit, sourceManifestSha256: receipt.sourceManifestSha256, sourceFiles: entries.length, recipeFiles: receipt.recipeFiles }, null, 2));

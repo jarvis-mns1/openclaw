@@ -9,7 +9,10 @@ export async function importToolingTypeScript(
   let loaded: unknown;
   if (process.versions.bun) {
     const [{ createJiti }, { buildPluginLoaderAliasMap, buildPluginLoaderJitiOptions }] =
-      await Promise.all([import("jiti"), import("../../src/plugins/sdk-alias.js")]);
+      await Promise.all([
+        import("../../src/plugins/jiti-factory.js"),
+        import("../../src/plugins/sdk-alias.js"),
+      ]);
     const modulePath = fileURLToPath(moduleUrl);
     const aliases = buildPluginLoaderAliasMap(modulePath, "", parentUrl, "src");
     const jiti = createJiti(parentUrl, {

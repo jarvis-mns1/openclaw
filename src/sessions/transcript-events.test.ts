@@ -1,5 +1,6 @@
 // Transcript event tests cover transcript event parsing and compaction.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { emitSessionIdentityMutation } from "./session-lifecycle-events.js";
 import {
   attachSessionTranscriptRunId,
   emitSessionTranscriptUpdate,
@@ -18,6 +19,33 @@ afterEach(() => {
 });
 
 describe("transcript events", () => {
+  it("owns identity-mutation subscription and cleanup with the internal listener", () => {
+    const transcript = vi.fn();
+    const identity = vi.fn();
+    const publicListener = vi.fn();
+    const unsubscribe = onInternalSessionTranscriptUpdate(transcript, {
+      onIdentityMutation: identity,
+    });
+    cleanup.push(unsubscribe, onSessionTranscriptUpdate(publicListener));
+    const mutation = {
+      agentId: "main",
+      kind: "replace" as const,
+      previous: { sessionId: "old", sessionKeys: ["global"] },
+      current: { sessionId: "new", sessionKeys: ["global"] },
+    };
+    emitSessionIdentityMutation(mutation);
+    expect(identity).toHaveBeenCalledExactlyOnceWith(mutation);
+    expect(transcript).not.toHaveBeenCalled();
+    expect(publicListener).not.toHaveBeenCalled();
+
+    unsubscribe();
+    unsubscribe();
+    emitSessionIdentityMutation(mutation);
+    emitSessionTranscriptUpdate({ sessionFile: "/tmp/synthetic-transcript.jsonl" });
+    expect(identity).toHaveBeenCalledTimes(1);
+    expect(transcript).not.toHaveBeenCalled();
+  });
+
   it.each(["assistant", "toolResult"])("persists normalized run ownership on %s rows", (role) => {
     const message = { role, content: [], __openclaw: { seq: 2 } };
 

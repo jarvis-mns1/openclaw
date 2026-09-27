@@ -4,7 +4,7 @@ import { WebSocket } from "ws";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import type { StreamEvent } from "./mock-openai-contracts.js";
 import { resolveMockSubagentTurn } from "./mock-openai-input.js";
-import { QA_TOOL_SEARCH_SECONDARY_TARGET, readTargetFromPrompt } from "./mock-openai-tooling.js";
+import { readTargetFromPrompt } from "./mock-openai-tooling.js";
 import {
   type MockServer,
   QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
@@ -5318,7 +5318,7 @@ Update and merge these partial structured summaries.`,
     expect(String(toolPlanOutput.arguments)).toContain("current");
   });
 
-  it("plans one structured batch search for the Tool Search gateway fixture", async () => {
+  it("plans one structured scalar search for the Tool Search gateway fixture", async () => {
     const server = await startMockServer();
     const targetTool = "fake_plugin_tool_17";
 
@@ -5335,10 +5335,8 @@ Update and merge these partial structured summaries.`,
     expect(toolPlanOutput.type).toBe("function_call");
     expect(toolPlanOutput.name).toBe("tool_search");
     expect(JSON.parse(String(toolPlanOutput.arguments))).toEqual({
-      queries: [
-        { query: targetTool, limit: 1 },
-        { query: QA_TOOL_SEARCH_SECONDARY_TARGET, limit: 1 },
-      ],
+      query: targetTool,
+      limit: 1,
     });
   });
 
@@ -5366,50 +5364,78 @@ Update and merge these partial structured summaries.`,
     });
   });
 
-  it("calls the selected catalog tool after a structured batch search", async () => {
+  it("plans separate batch discovery after the gateway fixture's scalar search", async () => {
     const server = await startMockServer();
     const targetTool = "fake_plugin_tool_17";
-
     const response = await expectNonStreamingResponses(server, {
       tools: [
         { type: "function", name: "tool_search" },
+        { type: "function", name: "tool_search_batch" },
         { type: "function", name: "tool_call" },
       ],
       input: [
-        makeUserInput(
-          `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
-        ),
+        makeUserInput(`tool search qa check target=${targetTool} scalar-and-batch`),
         {
           type: "function_call",
           call_id: "call_tool_search_1",
           name: "tool_search",
-          arguments: JSON.stringify({
-            queries: [
-              { query: targetTool, limit: 1 },
-              { query: QA_TOOL_SEARCH_SECONDARY_TARGET, limit: 1 },
-            ],
-          }),
+          arguments: JSON.stringify({ query: targetTool, limit: 1 }),
         },
-        makeToolOutputWithCallId(
-          "call_tool_search_1",
-          JSON.stringify({
-            results: [
-              { query: targetTool, candidates: [{ name: targetTool }] },
-              {
-                query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-                candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-              },
-            ],
-          }),
-        ),
+        makeToolOutputWithCallId("call_tool_search_1", JSON.stringify([{ name: targetTool }])),
       ],
     });
-
     const toolPlanOutput = outputItem(await response.json());
-    expect(toolPlanOutput.type).toBe("function_call");
-    expect(toolPlanOutput.name).toBe("tool_call");
-    expect(JSON.parse(String(toolPlanOutput.arguments))).toMatchObject({ id: targetTool });
+    expect(toolPlanOutput.name).toBe("tool_search_batch");
+    expect(JSON.parse(String(toolPlanOutput.arguments))).toEqual({
+      queries: [
+        { query: targetTool, limit: 1 },
+        { query: "fake plugin tool", limit: 2 },
+      ],
+    });
   });
+
+  it.each(["tool_search", "tool_search_batch"])(
+    "calls the selected catalog tool after %s",
+    async (searchTool) => {
+      const server = await startMockServer();
+      const targetTool = "fake_plugin_tool_17";
+
+      const response = await expectNonStreamingResponses(server, {
+        tools: [
+          { type: "function", name: searchTool },
+          { type: "function", name: "tool_call" },
+        ],
+        input: [
+          makeUserInput(
+            `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
+          ),
+          {
+            type: "function_call",
+            call_id: "call_tool_search_1",
+            name: searchTool,
+            arguments: JSON.stringify(
+              searchTool === "tool_search"
+                ? { query: targetTool, limit: 1 }
+                : { queries: [{ query: targetTool, limit: 1 }] },
+            ),
+          },
+          makeToolOutputWithCallId(
+            "call_tool_search_1",
+            JSON.stringify(
+              searchTool === "tool_search"
+                ? [{ name: targetTool }]
+                : { results: [{ query: targetTool, candidates: [{ name: targetTool }] }] },
+            ),
+          ),
+        ],
+      });
+
+      const toolPlanOutput = outputItem(await response.json());
+      expect(toolPlanOutput.type).toBe("function_call");
+      expect(toolPlanOutput.name).toBe("tool_call");
+      expect(JSON.parse(String(toolPlanOutput.arguments))).toMatchObject({ id: targetTool });
+    },
+  );
 
   it("does not call a catalog tool when structured search returns no matching candidate", async () => {
     const server = await startMockServer();
@@ -5428,12 +5454,9 @@ Update and merge these partial structured summaries.`,
           type: "function_call",
           call_id: "call_tool_search_1",
           name: "tool_search",
-          arguments: JSON.stringify({ queries: [{ query: targetTool, limit: 1 }] }),
+          arguments: JSON.stringify({ query: targetTool, limit: 1 }),
         },
-        makeToolOutputWithCallId(
-          "call_tool_search_1",
-          JSON.stringify({ results: [{ query: targetTool, candidates: [] }] }),
-        ),
+        makeToolOutputWithCallId("call_tool_search_1", JSON.stringify([])),
       ],
     });
 

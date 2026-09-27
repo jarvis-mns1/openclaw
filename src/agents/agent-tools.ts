@@ -82,6 +82,7 @@ import {
   resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_BATCH_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
@@ -179,6 +180,7 @@ export function createOpenClawCodingToolsInternal(
     ? [
         TOOL_SEARCH_CODE_MODE_TOOL_NAME,
         TOOL_SEARCH_RAW_TOOL_NAME,
+        TOOL_SEARCH_BATCH_TOOL_NAME,
         TOOL_DESCRIBE_RAW_TOOL_NAME,
         TOOL_CALL_RAW_TOOL_NAME,
       ]

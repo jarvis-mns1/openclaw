@@ -21,6 +21,7 @@ const UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES = new Set([
   "conversations_list",
   "get_goal",
   "tool_search",
+  "tool_search_batch",
   "tool_describe",
   "view_image",
 ]);

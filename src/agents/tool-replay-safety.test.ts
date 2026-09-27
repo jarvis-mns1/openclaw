@@ -7,6 +7,19 @@ import {
 } from "./tool-replay-safety.js";
 
 describe("agent tool replay safety", () => {
+  it.each(["tool_search", "tool_search_batch"])(
+    "retains %s replay safety without overriding owner or collision guards",
+    (name) => {
+      const tool = { name };
+      expect(isAgentToolReplaySafe(tool)).toBe(true);
+      expect(isAgentToolRestartSafe(tool)).toBe(true);
+      expect(collectReplaySafeToolNames([tool])).toEqual(new Set([name]));
+      expect(collectReplaySafeToolNames([tool, { name }])).toEqual(new Set());
+      expect(isAgentToolReplaySafe(tool, { declaredReplaySafe: () => false })).toBe(false);
+      expect(isAgentToolRestartSafe(tool, { declaredReplaySafe: () => false })).toBe(false);
+    },
+  );
+
   it("allows only audited unconditional core tools", () => {
     expect(isAgentToolReplaySafe({ name: "search" })).toBe(true);
     expect(isAgentToolReplaySafe({ name: "progress_card" })).toBe(false);

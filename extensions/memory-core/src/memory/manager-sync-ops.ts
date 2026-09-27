@@ -215,7 +215,12 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       if (hasTargetSessionRequest && !hasTargetArchiveFiles) {
         return;
       }
-      if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
+      if (
+        (params?.reason === "cli" || params?.reason === "session-reconcile") &&
+        !params.force &&
+        !hasTargetArchiveFiles
+      ) {
+        // Refresh after admission: an older pass may have cleared newer dirty files.
         await this.markSessionStartupCatchupDirtyFiles();
       }
       const syncProviderKey = this.syncProviderGeneration

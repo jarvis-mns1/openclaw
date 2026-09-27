@@ -58,6 +58,7 @@ import {
 import {
   enqueueMemoryTargetedSessionSync,
   hasTargetedSessionSyncParams,
+  MemoryWatchSyncQueue,
 } from "./manager-sync-control.js";
 import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
 
@@ -116,6 +117,15 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   private queuedForce = false;
   private queuedProgressCallbacks = new Set<NonNullable<MemorySyncParams["progress"]>>();
   private queuedSessionSync: Promise<void> | null = null;
+  private watchSyncQueue = new MemoryWatchSyncQueue(
+    () => this.syncing,
+    async (params) => {
+      if (!hasTargetedSessionSyncParams(params)) {
+        this.dirty = true;
+      }
+      await this.syncAdmitted(params, { queuedOwner: true });
+    },
+  );
   protected indexIdentityState: MemoryIndexIdentityState;
 
   static async get(params: {
@@ -342,6 +352,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     }
     // Close must drain accepted syncs through provider initialization and final writes.
     return await this.withManagerOperation(async () => {
+      if (params?.reason === "watch") {
+        return await this.watchSyncQueue.enqueue(params);
+      }
       if (
         hasTargetedSessionSyncParams(params) &&
         (this.queuedSessionSync !== null ||
@@ -352,7 +365,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         // call through the queue even while idle so it adopts that retained work.
         return await this.enqueueTargetedSessionSync(params);
       }
-      return await this.syncAdmitted(params);
+      return await this.syncAdmitted(params, {
+        queuedOwner: params?.reason === "session-reconcile",
+      });
     });
   }
 
@@ -381,21 +396,20 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     params?: MemorySyncParams,
     options?: {
       allowEmbeddingBootstrapFallback?: boolean;
-      queuedSessionOwner?: boolean;
+      queuedOwner?: boolean;
     },
   ): Promise<void> {
     if (this.syncing) {
-      if (hasTargetedSessionSyncParams(params)) {
-        if (options?.queuedSessionOwner) {
-          // Another caller claimed the sync slot after this queue owner was
-          // created. Wait for it, then retry admission instead of enqueueing
-          // into the promise that is already awaiting this call.
-          await this.syncing.catch(() => undefined);
-          if (this.closing || this.closed) {
-            return;
-          }
-          return await this.syncAdmitted(params, options);
+      if (options?.queuedOwner) {
+        // Another owner can claim the slot while this queue awaits admission.
+        // Its pass cannot satisfy this owner's pending work.
+        await this.syncing.catch(() => undefined);
+        if (this.closing || this.closed) {
+          return;
         }
+        return await this.syncAdmitted(params, options);
+      }
+      if (hasTargetedSessionSyncParams(params)) {
         return this.enqueueTargetedSessionSync(params);
       }
       try {
@@ -531,7 +545,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         setQueuedSessionSync: (value) => {
           this.queuedSessionSync = value;
         },
-        sync: async (params) => await this.syncAdmitted(params, { queuedSessionOwner: true }),
+        sync: async (params) => await this.syncAdmitted(params, { queuedOwner: true }),
       },
       targets,
     );
@@ -584,6 +598,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         this.sessionsDirty ||
         this.indexIdentityDirty ||
         this.syncing !== null ||
+        this.watchSyncQueue.active ||
         this.activeBackgroundSearchSyncs.size > 0,
       lastSyncError: this.syncOutcomes.lastError,
       workspaceDir: this.workspaceDir,
@@ -690,6 +705,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     this.queuedSessions.clear();
     this.queuedForce = false;
     this.queuedProgressCallbacks.clear();
+    await this.watchSyncQueue.close();
     await this.awaitManagerIdle();
     this.closed = true;
     const pendingProviderInit = this.providerInitPromise;

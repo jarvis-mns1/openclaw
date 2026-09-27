@@ -7,7 +7,6 @@ import {
   type AgentCommandOutputEventData,
   projectAgentToolActivity,
 } from "../infra/agent-activity-events.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
 import { peekAdjustedParamsForToolCall } from "./agent-tools.before-tool-call.state.js";
 import { extractLiveExecOutput } from "./embedded-agent-subscribe.handlers.tools.results.js";
 import {
@@ -15,6 +14,7 @@ import {
   buildCommandItemTitle,
   buildToolStartKey,
   emitAgentEventCallbackBestEffort,
+  emitToolHandlerAgentEvent,
   emitToolActivityEvent,
   emitTrackedItemEvent,
   isExecToolName,
@@ -128,8 +128,7 @@ export function handleToolExecutionUpdate(
   // Typed progress already has a sanitized path; suppress duplicate raw previews.
   const emitDetailedLiveUpdate = !toolProgress && (!isExecTool || execUpdate !== undefined);
   if (emitDetailedLiveUpdate) {
-    emitAgentEvent({
-      runId: ctx.params.runId,
+    emitToolHandlerAgentEvent(ctx, {
       stream: "tool",
       data: {
         phase: "update",

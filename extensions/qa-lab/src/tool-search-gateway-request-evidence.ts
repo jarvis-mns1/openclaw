@@ -11,6 +11,7 @@ const TOOL_SEARCH_REQUEST_EVIDENCE_LIMIT = 12;
 const SAFE_TOOL_SEARCH_STAGE_NAMES = new Set([
   "tool_search_code",
   "tool_search",
+  "tool_search_batch",
   "tool_describe",
   "tool_call",
 ]);
@@ -72,6 +73,7 @@ export async function countToolSearchSessionLogMentions(params: {
     needles: {
       tool_search_code: "tool_search_code",
       tool_search: "tool_search",
+      tool_search_batch: "tool_search_batch",
       tool_describe: "tool_describe",
       tool_call: "tool_call",
       [params.targetTool]: params.targetTool,

@@ -13,17 +13,17 @@ const REQUIRED_MCP_FILE_HASHES = new Map([
   ["LICENSE", "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"],
   [
     "build/src/third_party/THIRD_PARTY_NOTICES",
-    "8f10277934fe6888173f41f7cbbd9112d208c8c931bf163db59110f69f119e53",
+    "99ca099e8b5270fa40e8a8b86991e633a953bb36e1ea7b424d79cbfc5adc5c1d",
   ],
   ["build/src/TextSnapshot.js", "299833ad0e4cfc171a417afaec41df594e4862fe53a7ada6ba160409f979788b"],
   ["build/src/McpPage.js", "b9e791d758e4d28589525e2d427600e24b271d365a5879893a392043a11cf426"],
   [
     "build/src/third_party/index.js",
-    "a8f5cb1e02405d347117114141b58572f71c083861fb50ab31a27511e3a279bf",
+    "198eb626c3678bf7f71b3b7b026559b3b52b80140e92d9df87513d701f9d716d",
   ],
   [
     "build/src/OPENCLAW_PATCH_NOTICE.md",
-    "8f5a32aaedf4bb6f8ad39f226bd343bf804132c11ebc6c3c19f667669856287c",
+    "e6ebbe851c046eb3ead560f21e384a68bb8017b84afef192caf082dde8ef493b",
   ],
 ]);
 const REQUIRED_MCP_FILES = [

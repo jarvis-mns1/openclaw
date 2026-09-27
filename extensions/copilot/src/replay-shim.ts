@@ -229,6 +229,7 @@ const COPILOT_REPLAY_SAFE_READ_ONLY_TOOL_NAMES = new Set([
   "sessions_list",
   "status",
   "tool_search",
+  "tool_search_batch",
   "update_plan",
   "view",
   "web_fetch",

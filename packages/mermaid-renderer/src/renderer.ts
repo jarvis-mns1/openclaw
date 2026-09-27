@@ -1,7 +1,7 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import createDOMPurify from "dompurify";
 import type { MermaidConfig } from "mermaid";
-import mermaidScriptUrl from "mermaid/dist/mermaid.min.js?url&no-inline";
+import mermaidScriptUrl from "../vendor/mermaid-11.17.2-remediated/mermaid.min.js?url&no-inline";
 import frameScriptUrl from "./frame.js?url&no-inline";
 
 export type MermaidTheme = {

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSubscribedSessionHarness } from "../agents/embedded-agent-subscribe.e2e-harness.js";
 import {
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
@@ -122,6 +123,66 @@ describe("retired execution event projection", () => {
     expect(delivered).toHaveLength(isHeartbeat ? 0 : 1);
     expect(receiver.broadcast).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "preserves private subscribed tool delivery after cleanup (heartbeat=%s)",
+    async (isHeartbeat) => {
+      const receiver = createReceiver();
+      const unsubscribe = onAgentRuntimeEvent(receiver.observe);
+      try {
+        await withAgentRunLifecycleGeneration(getAgentEventLifecycleGeneration(), async () => {
+          const owner = {
+            runId: "late-subscribed",
+            agentId: "delivery",
+            sessionKey: "agent:delivery:late",
+          };
+          registerAgentRunContext(owner.runId, {
+            ...owner,
+            isControlUiVisible: false,
+            projectSessionMessages: true,
+            isHeartbeat,
+            verboseLevel: "full",
+            registeredAt: 100,
+          });
+          const { emit, subscription } = createSubscribedSessionHarness(owner);
+          try {
+            clearAgentRunContext(owner.runId);
+            emit({
+              type: "tool_execution_start",
+              toolName: "read",
+              toolCallId: "finished",
+              args: { path: "fixture.txt" },
+            });
+            emit({
+              type: "tool_execution_end",
+              toolName: "read",
+              toolCallId: "finished",
+              isError: false,
+              result: { content: [{ type: "text", text: "retained" }] },
+            });
+            await subscription.waitForPendingEvents();
+          } finally {
+            subscription.unsubscribe();
+          }
+        });
+      } finally {
+        unsubscribe();
+        receiver.handler.dispose();
+        expect(receiver.errors).toEqual([]);
+      }
+      const delivered = receiver.broadcastToConnIds.mock.calls.filter(
+        ([name, event]) => name === "agent" && event.stream === "tool",
+      );
+      expect(delivered.map(([, event]) => event.data.phase)).toEqual(
+        isHeartbeat ? [] : ["start", "result"],
+      );
+      for (const [, event, recipients] of delivered) {
+        expect(event).toMatchObject({ agentId: "delivery", sessionKey: "agent:delivery:late" });
+        expect(recipients).toEqual(new Set(["selected"]));
+      }
+      expect(receiver.broadcast).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves run verbosity until a newer session preference replaces it", () => {
     const receiver = createReceiver();
