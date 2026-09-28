@@ -72,6 +72,10 @@ export function expectResponses(server: MockServer, body: unknown) {
   return expectOk(postResponses(server, body));
 }
 
+export function expectNonStreamingResponses(server: MockServer, body: Record<string, unknown>) {
+  return expectResponses(server, { stream: false, ...body });
+}
+
 export async function expectResponsesJson<T>(server: MockServer, body: unknown) {
   return (await expectResponses(server, body)).json() as Promise<T>;
 }

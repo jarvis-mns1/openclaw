@@ -98,19 +98,19 @@ import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { abortChatRunById, registerChatAbortController } from "./chat-abort.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
+  agentBroadcastCalls,
+  chatBroadcastCalls,
+  chatDeltaTexts,
+  createAgentEventHarnessFactory,
+  emitRun1AssistantText,
+} from "./server-chat.agent-events-harness.test-support.js";
+import {
   emitAgentEvent,
   emitAgentEvents,
   registerChatRun,
   registerNamedChatRun,
 } from "./server-chat.agent-events.test-helpers.js";
-import {
-  createAgentEventHandler,
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createChatAbortMarker,
-  createSessionMessageSubscriberRegistry,
-  type AgentEventHandlerOptions,
-} from "./server-chat.js";
+import { createChatAbortMarker, type AgentEventHandlerOptions } from "./server-chat.js";
 import { broadcastChatError, broadcastChatFinal } from "./server-methods/chat-broadcast.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -162,87 +162,10 @@ describe("agent event handler", () => {
     resetAgentEventsForTest({ preserveListeners: true });
   });
 
-  function createHarness(params?: {
-    now?: number;
-    resolveSessionKeyForRun?: (runId: string, options?: { agentId?: string }) => string | undefined;
-    lifecycleErrorRetryGraceMs?: number;
-    isChatSendRunActive?: (runId: string) => boolean;
-    clearTrackedActiveRun?: AgentEventHandlerOptions["clearTrackedActiveRun"];
-    settleTrackedTerminal?: AgentEventHandlerOptions["settleTrackedTerminal"];
-    trackTrackedRunTerminalPersistence?: AgentEventHandlerOptions["trackTrackedRunTerminalPersistence"];
-    resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
-    updateRunToolErrorSummary?: AgentEventHandlerOptions["updateRunToolErrorSummary"];
-    resolveSessionActiveRunState?: AgentEventHandlerOptions["resolveSessionActiveRunState"];
-  }) {
-    const nowSpy =
-      params?.now === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(params.now);
-    const broadcast = vi.fn();
-    const broadcastToConnIds = vi.fn();
-    const nodeSendToSession = vi.fn();
-    const nodeHasSessionSubscribers = vi.fn(() => true);
-    const clearAgentRunContext = vi.fn();
-    const clearTrackedActiveRun =
-      vi.fn<NonNullable<AgentEventHandlerOptions["clearTrackedActiveRun"]>>();
-    const agentRunSeq = new Map<string, number>();
-    const chatRunState = createChatRunState();
-    const toolEventRecipients = chatRunState.toolEventRecipients;
-    const sessionEventSubscribers = createSessionEventSubscriberRegistry();
-    const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
-
-    const handler = createAgentEventHandler({
-      broadcast,
-      broadcastToConnIds,
-      nodeSendToSession,
-      nodeHasSessionSubscribers,
-      agentRunSeq,
-      chatRunState,
-      resolveSessionKeyForRun: params?.resolveSessionKeyForRun ?? (() => undefined),
-      clearAgentRunContext,
-      toolEventRecipients,
-      sessionEventSubscribers,
-      sessionMessageSubscribers,
-      loadGatewaySessionLifecycleSnapshotForEvent: loadGatewaySessionLifecycleSnapshotMock,
-      persistGatewaySessionLifecycleEventForEvent: persistGatewaySessionLifecycleEventMock,
-      lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
-      isChatSendRunActive: params?.isChatSendRunActive,
-      clearTrackedActiveRun: params?.clearTrackedActiveRun ?? clearTrackedActiveRun,
-      settleTrackedTerminal: params?.settleTrackedTerminal,
-      trackTrackedRunTerminalPersistence: params?.trackTrackedRunTerminalPersistence,
-      resolveActiveLifecycleGenerationForRun: params?.resolveActiveLifecycleGenerationForRun,
-      updateRunToolErrorSummary: params?.updateRunToolErrorSummary,
-      resolveSessionActiveRunState: params?.resolveSessionActiveRunState,
-    });
-
-    return {
-      nowSpy,
-      broadcast,
-      broadcastToConnIds,
-      nodeSendToSession,
-      nodeHasSessionSubscribers,
-      clearAgentRunContext,
-      clearTrackedActiveRun,
-      agentRunSeq,
-      chatRunState,
-      toolEventRecipients,
-      sessionEventSubscribers,
-      sessionMessageSubscribers,
-      handler,
-    };
-  }
-
-  function emitRun1AssistantText(
-    harness: ReturnType<typeof createHarness>,
-    text: string,
-    field: "text" | "delta" = "text",
-    managedMediaUrls?: string[],
-  ): ReturnType<typeof createHarness> {
-    registerChatRun(harness.chatRunState, "run-1", "session-1", "client-1");
-    emitAgentEvent(harness.handler, "run-1", "assistant", {
-      [field]: text,
-      ...(managedMediaUrls ? { managedMediaUrls } : {}),
-    });
-    return harness;
-  }
+  const createHarness = createAgentEventHarnessFactory({
+    loadGatewaySessionLifecycleSnapshotForEvent: loadGatewaySessionLifecycleSnapshotMock,
+    persistGatewaySessionLifecycleEventForEvent: persistGatewaySessionLifecycleEventMock,
+  });
 
   function mockSessionEntry(
     entry: ReturnType<typeof loadSessionEntry>["entry"],
@@ -258,21 +181,6 @@ describe("agent event handler", () => {
       storeKeys: [canonicalKey],
       legacyKey: undefined,
     });
-  }
-
-  function chatBroadcastCalls(broadcast: ReturnType<typeof vi.fn>) {
-    return broadcast.mock.calls.filter(([event]) => event === "chat");
-  }
-
-  function chatDeltaTexts(broadcast: ReturnType<typeof vi.fn>) {
-    return chatBroadcastCalls(broadcast)
-      .map(([, payload]) => payload as { state?: string; deltaText?: string })
-      .filter((payload) => payload.state === "delta")
-      .map((payload) => payload.deltaText);
-  }
-
-  function agentBroadcastCalls(broadcast: ReturnType<typeof vi.fn>) {
-    return broadcast.mock.calls.filter(([event]) => event === "agent");
   }
 
   function answerCandidate(

@@ -3,15 +3,65 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { describe, expect, it } from "vitest";
 import {
+  encodeMemoryEmbedding,
+  MEMORY_INDEX_META_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { describe, expect, it, vi } from "vitest";
+import {
+  collectMemoryCacheStatus,
   collectMemoryStatusAggregate,
   collectMemoryStorageStatus,
+  collectMemoryVectorStatus,
   resolveStatusProviderInfo,
 } from "./manager-status-state.js";
 
 describe("memory manager status state", () => {
+  it("does not inspect disabled caches or recount an existing diagnostic snapshot", () => {
+    const prepare = vi.fn(() => {
+      throw new Error("cache status must not query this database");
+    });
+    expect(collectMemoryCacheStatus({ prepare }, { enabled: false, maxEntries: 10 })).toEqual({
+      enabled: false,
+      maxEntries: 10,
+    });
+    expect(
+      collectMemoryCacheStatus(
+        { prepare },
+        { enabled: true, maxEntries: 10 },
+        {
+          databaseBytes: 0,
+          walBytes: 0,
+          reusableBytes: 0,
+          embeddingCacheBytes: 0,
+          embeddingCacheEntries: 0,
+        },
+      ),
+    ).toEqual({ enabled: true, entries: 0, maxEntries: 10 });
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it("counts enabled cache entries without requiring a diagnostic storage snapshot", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec("CREATE TABLE memory_embedding_cache (embedding BLOB)");
+      expect(collectMemoryCacheStatus(db, { enabled: true })).toEqual({
+        enabled: true,
+        entries: 0,
+        maxEntries: undefined,
+      });
+      db.exec("INSERT INTO memory_embedding_cache VALUES (zeroblob(8)), (zeroblob(16))");
+      expect(collectMemoryCacheStatus(db, { enabled: true, maxEntries: 10 })).toEqual({
+        enabled: true,
+        entries: 2,
+        maxEntries: 10,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("distinguishes retained cache payload, WAL, and reusable space without changing the database", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-storage-status-"));
     const databasePath = path.join(root, "agent.sqlite");
@@ -50,6 +100,43 @@ describe("memory manager status state", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it.each([null, false, true])(
+    "keeps vector completeness and semantic availability separate from store availability %s",
+    (available) => {
+      const db = new DatabaseSync(":memory:");
+      try {
+        db.exec(`
+          CREATE TABLE ${MEMORY_INDEX_META_TABLE} (key TEXT, value TEXT);
+          CREATE TABLE ${MEMORY_INDEX_VECTOR_TABLE} (id TEXT);
+          INSERT INTO ${MEMORY_INDEX_META_TABLE} VALUES ('memory_vector_rebuild_v1', 'clean');
+        `);
+        const vector = {
+          enabled: true,
+          available,
+          semanticAvailable: false,
+          extensionPath: "/synthetic/vector-extension",
+          loadError: "synthetic unavailable provider",
+          dims: 2,
+        };
+        const before = db.prepare("SELECT total_changes() AS changes").get();
+        expect(collectMemoryVectorStatus(db, vector, true)).toEqual({
+          enabled: true,
+          index: { state: "complete" },
+          storeAvailable: available ?? undefined,
+          semanticAvailable: false,
+          available: false,
+          extensionPath: vector.extensionPath,
+          loadError: vector.loadError,
+          dims: 2,
+        });
+        expect(collectMemoryVectorStatus(db, vector, false).index).toEqual({ state: "empty" });
+        expect(db.prepare("SELECT total_changes() AS changes").get()).toEqual(before);
+      } finally {
+        db.close();
+      }
+    },
+  );
 
   it.each([
     {

@@ -9,7 +9,6 @@ import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { logWarn } from "../logger.js";
-import type { PluginHookToolRequesterContext } from "../plugins/hook-types.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -23,6 +22,10 @@ import {
   copyAgentToolMetadata,
 } from "./agent-tool-metadata.js";
 import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
+import {
+  createCodingToolsHookContext,
+  resolveCodingToolsCapabilityProfile,
+} from "./agent-tools.context.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import {
   filterToolsByMessageProvider,
@@ -41,7 +44,6 @@ import { waitForExecScope } from "./bash-process-registry.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { listChannelAgentTools } from "./channel-tools.js";
-import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { isConversationToolAllowed } from "./conversation-tool-policy-pipeline.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import {
@@ -69,7 +71,6 @@ import {
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
 import { subagentAttachmentRootForRun } from "./subagents/subagent-attachment-paths.js";
 import { resolveToolFsConfig } from "./tool-fs-policy.js";
-import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import {
   expandToolGroups,
@@ -109,54 +110,7 @@ export function createOpenClawCodingToolsInternal(
   // Prefer the already-resolved sandbox context policy. Recomputing from
   // sessionKey/config can lose the real sandbox agent when callers pass a
   // legacy alias like `main` instead of an agent session key.
-  const capabilityProfile =
-    options?.conversationCapabilityProfile ??
-    resolveConversationCapabilityProfile({
-      config: options?.config,
-      sessionKey: options?.sessionKey,
-      runSessionKey: options?.runSessionKey,
-      sessionId: options?.sessionId,
-      runId: options?.runId,
-      agentId: options?.policyAgentId ?? options?.agentId,
-      agentDir: options?.agentDir,
-      agentAccountId: options?.agentAccountId,
-      messageProvider: options?.messageProvider,
-      messageChannel: options?.messageChannel,
-      chatType: options?.chatType,
-      messageTo: options?.messageTo,
-      messageThreadId: options?.messageThreadId,
-      conversationToolPolicy: options?.conversationToolPolicy,
-      currentChannelId: options?.currentChannelId,
-      currentMessagingTarget: options?.currentMessagingTarget,
-      currentThreadTs: options?.currentThreadTs,
-      currentMessageId: options?.currentMessageId,
-      groupId: options?.groupId,
-      groupChannel: options?.groupChannel,
-      groupSpace: options?.groupSpace,
-      memberRoleIds: options?.memberRoleIds,
-      spawnedBy: options?.spawnedBy,
-      senderId: options?.senderId,
-      senderName: options?.senderName,
-      senderUsername: options?.senderUsername,
-      senderE164: options?.senderE164,
-      senderIsOwner: options?.senderIsOwner,
-      modelProvider: options?.modelProvider,
-      modelId: options?.modelId,
-      modelApi: options?.modelApi,
-      modelContextWindowTokens: options?.modelContextWindowTokens,
-      modelHasVision: options?.modelHasVision,
-      workspaceDir: options?.workspaceDir,
-      cwd: options?.cwd,
-      spawnWorkspaceDir: options?.spawnWorkspaceDir,
-      skillsSnapshot: options?.skillsSnapshot,
-      sandboxToolPolicy: sandbox?.tools,
-      runtimeToolAllowlist: options?.runtimeToolAllowlist,
-      inheritRuntimeToolAllowlist: options?.inheritRuntimeToolAllowlist,
-      inputProvenance: options?.inputProvenance,
-      trustedInternalHandoff: options?.trustedInternalHandoff,
-      scheduledToolPolicy: options?.scheduledToolPolicy,
-      pluginMetadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
-    });
+  const capabilityProfile = resolveCodingToolsCapabilityProfile(options, sandbox);
   const { agentId, runtimePluginToolGrant } = capabilityProfile.policy;
   // Tool restrictions can belong to another agent. Never use that owner for
   // credentials, requester identity, or execution hooks.
@@ -756,42 +710,18 @@ export function createOpenClawCodingToolsInternal(
     );
   }
   options?.recordToolPrepStage?.("authorization-policy");
-  const turnSourceChannel = options?.messageChannel ?? options?.messageProvider;
-  const turnSourceTo = options?.currentMessagingTarget ?? options?.currentChannelId;
-  const requester = {
-    ...(turnSourceChannel ? { channel: turnSourceChannel } : {}),
-    ...(options?.agentAccountId ? { accountId: options.agentAccountId } : {}),
-    ...(options?.senderId ? { senderId: options.senderId } : {}),
-    ...(options?.senderIsOwner !== undefined ? { senderIsOwner: options.senderIsOwner } : {}),
-    ...(options?.memberRoleIds?.length ? { roleIds: [...options.memberRoleIds] } : {}),
-  } satisfies PluginHookToolRequesterContext;
-  const hasRequester = Object.keys(requester).length > 0;
-  const hookContext = {
-    agentId: executionAgentId,
-    ...(options?.config ? { config: options.config } : {}),
-    cwd: codingRoot,
-    workspaceDir: workspaceRoot,
-    ...(options?.skillsSnapshot ? { skillsSnapshot: options.skillsSnapshot } : {}),
-    ...(options?.skillUsagePaths ? { skillUsagePaths: options.skillUsagePaths } : {}),
-    ...(sandboxRoot && sandboxFsBridge && allowWorkspaceWrites
-      ? { sandbox: { root: sandboxRoot, bridge: sandboxFsBridge } }
-      : {}),
-    sessionKey: executionSessionKey,
-    sessionId: options?.sessionId,
-    runId: options?.runId,
-    trigger: options?.trigger,
-    approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
-    channelId: options?.hookChannelId ?? options?.currentChannelId,
-    ...(hasRequester ? { requester } : {}),
-    ...(turnSourceChannel ? { turnSourceChannel } : {}),
-    ...(turnSourceTo ? { turnSourceTo } : {}),
-    ...(options?.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
-    ...(options?.currentThreadTs ? { turnSourceThreadId: options.currentThreadTs } : {}),
-    ...(options?.trace ? { trace: options.trace } : {}),
-    loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
-    onToolOutcome: options?.onToolOutcome,
-    allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
-  };
+  const hookContext = createCodingToolsHookContext({
+    options,
+    policyAgentId: agentId,
+    executionAgentId,
+    executionSessionKey,
+    codingRoot,
+    workspaceRoot,
+    sandbox:
+      sandboxRoot && sandboxFsBridge && allowWorkspaceWrites
+        ? { root: sandboxRoot, bridge: sandboxFsBridge }
+        : undefined,
+  });
   // NOTE: Keep canonical (lowercase) tool names here. Provider transports remap on the wire.
   return finalizeAgentTools({
     tools: filterRequesterYieldTools(authorizedTools, executionSessionKey),
@@ -813,4 +743,3 @@ export function createOpenClawCodingTools(
 ): AnyAgentTool[] {
   return createOpenClawCodingToolsInternal(options);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

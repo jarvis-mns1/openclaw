@@ -9,9 +9,7 @@ import {
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
-  MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_FTS_TABLE,
-  MEMORY_INDEX_VECTOR_TABLE,
   type MemoryProviderStatus,
   type MemorySearchManager,
   type MemorySessionSyncTarget,
@@ -51,8 +49,10 @@ import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import { runMemorySearchMaintenance } from "./manager-search-maintenance.js";
 import { MemorySearchOrchestration } from "./manager-search-orchestration.js";
 import {
+  collectMemoryCacheStatus,
   collectMemoryStatusAggregate,
   collectMemoryStorageStatus,
+  collectMemoryVectorStatus,
   resolveStatusProviderInfo,
 } from "./manager-status-state.js";
 import {
@@ -60,7 +60,6 @@ import {
   hasTargetedSessionSyncParams,
   MemoryWatchSyncQueue,
 } from "./manager-sync-control.js";
-import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
 
 const log = createSubsystemLogger("memory");
 
@@ -612,20 +611,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       sourceCounts: aggregateState.sourceCounts.map((entry) =>
         Object.assign(entry, this.sourceInspections.get(entry.source) ?? {}),
       ),
-      cache: this.cache.enabled
-        ? {
-            enabled: true,
-            entries:
-              storage?.embeddingCacheEntries ??
-              (
-                this.db
-                  .prepare(`SELECT COUNT(*) as c FROM ${MEMORY_EMBEDDING_CACHE_TABLE}`)
-                  .get() as { c: number } | undefined
-              )?.c ??
-              0,
-            maxEntries: this.cache.maxEntries,
-          }
-        : { enabled: false, maxEntries: this.cache.maxEntries },
+      cache: collectMemoryCacheStatus(this.db, this.cache, storage),
       fts: {
         enabled: this.fts.enabled,
         available: this.fts.available,
@@ -634,21 +620,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       fallback: this.fallbackReason
         ? { from: this.fallbackFrom ?? "local", reason: this.fallbackReason }
         : undefined,
-      vector: {
-        enabled: this.vector.enabled,
-        index: resolvePersistedMemoryVectorIndexState({
-          db: this.db,
-          vectorTable: MEMORY_INDEX_VECTOR_TABLE,
-          metaVectorDims: this.vector.dims,
-          hasSemanticChunks: this.hasSemanticChunks(),
-        }),
-        storeAvailable: this.vector.available ?? undefined,
-        semanticAvailable: this.vector.semanticAvailable,
-        available: this.vector.semanticAvailable,
-        extensionPath: this.vector.extensionPath,
-        loadError: this.vector.loadError,
-        dims: this.vector.dims,
-      },
+      vector: collectMemoryVectorStatus(this.db, this.vector, this.hasSemanticChunks()),
       batch: {
         enabled: this.batch.enabled,
         failures: this.batchFailure.count,

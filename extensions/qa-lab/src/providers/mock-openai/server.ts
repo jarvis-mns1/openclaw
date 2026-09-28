@@ -96,8 +96,6 @@ import {
   QA_SKILL_WORKSHOP_GIF_PROMPT_RE,
   QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE,
   QA_RELEASE_AUDIT_PROMPT_RE,
-  QA_TOOL_SEARCH_PROMPT_RE,
-  QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
   QA_MCP_CODE_MODE_PROMPT_RE,
   QA_RESTART_CODE_MODE_WAIT_PROMPT_RE,
   QA_RESTART_RECOVERY_PROMPT_RE,
@@ -132,8 +130,6 @@ import {
   QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
   hasDeclaredTool,
   hasToolDefinition,
-  findNamedToolDefinition,
-  isQaToolSearchFixture,
   buildExplicitSessionsSpawnArgs,
   buildQaA2aMessageToolMirrorSessionsSendArgs,
   hasToolErrorOutput,
@@ -203,14 +199,12 @@ import {
   buildScenarioToolCallEvents,
   extractScenarioPlannedTool,
 } from "./mock-openai-tool-routing.js";
+import { resolveMockToolSearchCall } from "./mock-openai-tool-search.js";
 import {
   readTargetFromPrompt,
   execCommandFromToolProgressPrompt,
   buildToolCallEventsWithArgs as buildRawToolCallEventsWithArgs,
   extractOrbitCode,
-  extractToolSearchTarget,
-  toolSearchOutputHasCandidate,
-  buildQaToolSearchArgs,
   isActiveMemorySubagentPrompt,
   isSnackRecallPrompt,
   extractSnackPreference,
@@ -738,76 +732,16 @@ async function buildResponsesPayload(
     }
     return buildToolCallEventsWithArgs("read", { path: "LOOP_STEADY.txt" });
   }
-  if (
-    QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
-    QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText)
-  ) {
-    const targetTool = extractToolSearchTarget(allInputText);
-    const plannedArgs = targetTool
-      ? buildQaToolSearchArgs(
-          targetTool,
-          QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText),
-          allInputText,
-        )
-      : {};
-    if (
-      targetTool &&
-      hasCompletedToolOutput &&
-      (completedToolName === "tool_search" || completedToolName === "tool_search_batch") &&
-      !toolOutput.includes("FAKE_PLUGIN_OK") &&
-      toolSearchOutputHasCandidate(parseToolOutputJson(toolOutput), targetTool) &&
-      hasDeclaredTool(body, "tool_call")
-    ) {
-      if (
-        completedToolName === "tool_search" &&
-        allInputText.includes("scalar-and-batch") &&
-        hasDeclaredTool(body, "tool_search_batch")
-      ) {
-        return buildToolCallEventsWithArgs("tool_search_batch", {
-          queries: [
-            { query: targetTool, limit: 1 },
-            { query: "fake plugin tool", limit: 2 },
-          ],
-        });
-      }
-      return buildToolCallEventsWithArgs("tool_call", { id: targetTool, args: plannedArgs });
-    }
-    if (
-      !hasCompletedToolOutput &&
-      targetTool &&
-      findNamedToolDefinition(toolDeclarationBody, targetTool)?.type === "custom" &&
-      typeof plannedArgs.input === "string"
-    ) {
-      return buildToolCallEventsWithArgs(targetTool, plannedArgs);
-    }
-    if (!hasCompletedToolOutput && targetTool && hasDeclaredTool(body, "tool_search_code")) {
-      return buildToolCallEventsWithArgs("tool_search_code", {
-        code: [
-          `const hits = await openclaw.tools.search(${JSON.stringify(targetTool)}, { limit: 1 });`,
-          "const match = hits.find((tool) => tool.name === " + JSON.stringify(targetTool) + ");",
-          "if (!match) throw new Error('target tool not found');",
-          `return await openclaw.tools.call(match.id, ${JSON.stringify(plannedArgs)});`,
-        ].join("\n"),
-      });
-    }
-    if (
-      !hasCompletedToolOutput &&
-      targetTool &&
-      !hasDeclaredTool(body, targetTool) &&
-      hasDeclaredTool(body, "tool_search")
-    ) {
-      return buildToolCallEventsWithArgs("tool_search", {
-        query: targetTool,
-        limit: 1,
-      });
-    }
-    if (
-      !hasCompletedToolOutput &&
-      targetTool &&
-      (hasDeclaredTool(body, targetTool) || isQaToolSearchFixture(allInputText))
-    ) {
-      return buildToolCallEventsWithArgs(targetTool, plannedArgs);
-    }
+  const toolSearchCall = resolveMockToolSearchCall({
+    body,
+    toolDeclarationBody,
+    allInputText,
+    hasCompletedToolOutput,
+    completedToolName,
+    toolOutput,
+  });
+  if (toolSearchCall) {
+    return buildToolCallEventsWithArgs(toolSearchCall.name, toolSearchCall.args);
   }
   if (
     QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText) ||
