@@ -1,0 +1,28 @@
+rules:
+  - id: loopback-cdp-probe-copies-relay-auth-headers
+    message: Loopback CDP discovery/probe code should not merge extension relay auth headers into generic HTTP headers. This can leak a gateway-derived relay token to any local /json/version listener.
+    severity: ERROR
+    languages:
+      - typescript
+      - javascript
+    patterns:
+      - pattern-either:
+          - pattern: |
+              const $RELAY = $GET($URL);
+              ...
+              const $MERGED = { ...$RELAY, ...$HEADERS };
+          - pattern: |
+              const $MERGED = { ...$GET($URL), ...$HEADERS };
+      - metavariable-regex:
+          metavariable: $GET
+          # Retain capture 1 and all selectors. Residual anchors make OpenGrep's
+          # whole-file prefilter decline this regex; the captured callee still matches.
+          regex: (^getChromeExtensionRelayAuthHeaders$|^.*relay.*Headers$|^.*relay.*Auth.*$)
+    metadata:
+      category: security
+      confidence: medium
+      ghsa: GHSA-V3J7-34XH-6G3W
+      detector: A
+      advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-V3J7-34XH-6G3W
+      detector-bucket: precise
+      source-run: 2026-04-17T07-37-10Z

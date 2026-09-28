@@ -4081,7 +4081,7 @@ rules:
               const $MERGED = { ...$GET($URL), ...$HEADERS };
       - metavariable-regex:
           metavariable: $GET
-          regex: ^(getChromeExtensionRelayAuthHeaders|.*relay.*Headers|.*relay.*Auth.*)$
+          regex: (^getChromeExtensionRelayAuthHeaders$|^.*relay.*Headers$|^.*relay.*Auth.*$)
     metadata:
       category: security
       confidence: medium
@@ -4090,7 +4090,9 @@ rules:
       advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-V3J7-34XH-6G3W
       detector-bucket: precise
       source-run: 2026-04-17T07-37-10Z
+      advisory-id: GHSA-V3J7-34XH-6G3W
       source-rule-id: loopback-cdp-probe-copies-relay-auth-headers
+      source-file: security/opengrep/rules/ghsa-v3j7-34xh-6g3w/relay-auth-headers.yml
   - id: ghsa-v3qc-wrwx-j3pw.openclaw.gateway.config-write.missing-protected-path-guard
     languages:
       - typescript
