@@ -457,6 +457,22 @@ describe("registered async managed child linkage", () => {
       const held = holdTaskCreationCommand("flows.runTask", "after commit");
       const onEvent = vi.fn<(event: TaskRegistryObserverEvent) => void>();
       configureTaskRegistryRuntime({ observers: { onEvent } });
+      const store = getTaskRegistryStore();
+      const admission = captureOpenClawStateWorkerContext().admission;
+      const eventResult =
+        createDeferredCore<Awaited<ReturnType<typeof store.runAgentEventMutationAsync>>>();
+      const releaseEvent = createDeferredCore();
+      if (reuse) {
+        const mutate = store.runAgentEventMutationAsync.bind(store);
+        // Hold the real committed result before its observer continuation resumes.
+        vi.spyOn(store, "runAgentEventMutationAsync").mockImplementationOnce(async (...args) => {
+          const operation = mutate(...args);
+          eventResult.resolve(operation);
+          const result = await operation;
+          await releaseEvent.promise;
+          return result;
+        });
+      }
       const pending = managed.runTask({
         flowId: flow.flowId,
         runtime: "acp",
@@ -489,6 +505,10 @@ describe("registered async managed child linkage", () => {
         }
         if (reuse) {
           expect(receipt).toMatchObject({ task: { taskId: reusedId } });
+          expect(await eventResult.promise).toMatchObject({
+            task: { taskId: backing.taskId, status: "succeeded", endedAt: 200 },
+          });
+          releaseEvent.resolve();
         } else {
           expect(receipt.task.createdAt).toBeGreaterThan(backing.createdAt);
           expect([receipt.task.taskId, backing.taskId].toSorted()).toEqual([
@@ -496,11 +516,11 @@ describe("registered async managed child linkage", () => {
             backing.taskId,
           ]);
         }
+        // A synchronous read can consume successor events before an earlier worker publishes.
+        await captureTaskRegistryReadFence(admission);
         expect(listTasksForFlowId(flow.flowId)).toMatchObject([
           { status: "succeeded", endedAt: 200 },
         ]);
-        // Durable readback can precede observers; finish accepted events before retiring admission.
-        await captureTaskRegistryReadFence(captureOpenClawStateWorkerContext().admission);
         await closeOpenClawStateDatabaseAsync();
         if (completion === "record") {
           expect(onEvent).not.toHaveBeenCalled();
@@ -533,7 +553,12 @@ describe("registered async managed child linkage", () => {
         ).toMatchObject({ tasks: [{ status: "succeeded" }] });
       } finally {
         held.release();
-        await pending;
+        releaseEvent.resolve();
+        try {
+          await pending;
+        } finally {
+          await captureTaskRegistryReadFence(admission);
+        }
       }
     },
   );
