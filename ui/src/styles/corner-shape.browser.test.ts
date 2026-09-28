@@ -16,8 +16,8 @@ const describeCornerShape = canRunPlaywrightChromium(chromiumExecutablePath)
   : describe.skip;
 
 // The `@supports` condition base.css gates the whole refinement on. Rewriting
-// its value to one no engine implements is how this file reproduces Firefox
-// and Safari from the shipped stylesheet instead of a hand-copied fallback.
+// its value to one no engine implements exercises the unsupported branch in
+// Chromium from the shipped stylesheet; it does not emulate another engine.
 const SUPPORTS_CONDITION = "@supports (corner-shape: superellipse(1.5))";
 const UNSUPPORTED_CONDITION = "@supports (corner-shape: openclaw-unsupported-shape)";
 
@@ -245,6 +245,17 @@ function fixtureDocument(css: string): string {
 
 type CornerProbe = Record<string, { radius: string; shape: string }>;
 
+function normalizeCornerProbe(probe: CornerProbe): CornerProbe {
+  // CSS Borders 4 defines round as superellipse(1); engines serialize either form.
+  // https://drafts.csswg.org/css-borders-4/#corner-shaping
+  return Object.fromEntries(
+    Object.entries(probe).map(([selector, corner]) => [
+      selector,
+      { ...corner, shape: corner.shape === "superellipse(1)" ? "round" : corner.shape },
+    ]),
+  );
+}
+
 async function probeCorners(browser: Browser, fixtureFile: string): Promise<CornerProbe> {
   const page = await browser.newPage();
   try {
@@ -323,8 +334,21 @@ afterAll(async () => {
 });
 
 describeCornerShape("Control UI corner curvature", () => {
+  it.each([
+    ["round", "round"],
+    ["superellipse(1)", "round"],
+    ["superellipse(1.5)", "superellipse(1.5)"],
+    ["superellipse(2)", "superellipse(2)"],
+    ["", ""],
+    ["round superellipse(1.5)", "round superellipse(1.5)"],
+  ])("normalizes only the round alias: %j", (shape, expected) => {
+    expect(normalizeCornerProbe({ ".surface": { radius: "10px", shape } })).toEqual({
+      ".surface": { radius: "10px", shape: expected },
+    });
+  });
+
   it("scales and reshapes the surfaces that carry the app silhouette", async () => {
-    const probe = await probeCorners(browser, superellipticalFixture);
+    const probe = normalizeCornerProbe(await probeCorners(browser, superellipticalFixture));
 
     expect(probe).toEqual(
       Object.fromEntries([
@@ -344,8 +368,8 @@ describeCornerShape("Control UI corner curvature", () => {
     );
   });
 
-  it("keeps today's corners on engines without corner-shape", async () => {
-    const probe = await probeCorners(browser, circularFixture);
+  it("keeps today's corners when the corner-shape supports branch is inactive", async () => {
+    const probe = normalizeCornerProbe(await probeCorners(browser, circularFixture));
 
     expect(probe).toEqual(
       Object.fromEntries(
