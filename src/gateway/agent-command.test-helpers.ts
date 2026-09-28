@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
+import type { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { sleep } from "../utils/sleep.js";
 import { waitForFast } from "./client.test-support.js";
@@ -92,7 +93,7 @@ async function observeRunCompletion(runId: string, method: "agent" | "chat.send"
       : undefined;
   return {
     completed,
-    join: joinObservedWork,
+    settle: joinObservedWork,
     async [Symbol.asyncDispose]() {
       try {
         await joinObservedWork();
@@ -112,6 +113,29 @@ export const observeAgentRunCompletion = (runId: string) => observeRunCompletion
 
 /** Join one real chat RPC and its detached dispatch's native retained work. */
 export const observeChatRunCompletion = (runId: string) => observeRunCompletion(runId, "chat.send");
+
+/** Seed a completed agent snapshot and dispose its observer before reusing the run ID. */
+export async function seedCompletedAgentRun(
+  ws: WebSocket,
+  params: { runId: string; sessionKey: string; message: string },
+) {
+  const { rpcReq } = await import("./test-helpers.server.js");
+  await using seed = await observeAgentRunCompletion(params.runId);
+  const seedAgentRes = await rpcReq(ws, "agent", {
+    sessionKey: params.sessionKey,
+    message: params.message,
+    idempotencyKey: params.runId,
+  });
+  expect(seedAgentRes.ok).toBe(true);
+  expect(seedAgentRes.payload?.status).toBe("accepted");
+  const seedWaitRes = await rpcReq(ws, "agent.wait", {
+    runId: params.runId,
+    timeoutMs: 1_000,
+  });
+  expect(seedWaitRes.ok).toBe(true);
+  expect(seedWaitRes.payload?.status).toBe("ok");
+  await seed.completed;
+}
 
 /** Keep a selected synthetic session store alive through its admitted request work. */
 export async function withMainSessionStore<T>(
@@ -143,6 +167,17 @@ export async function withMainSessionStore<T>(
     testState.sessionStorePath = undefined;
     await removeChatTestDirectory(dir);
   }
+}
+
+export async function expectMainSessionReady(ws: WebSocket, sessionId = "sess-main") {
+  const { rpcReq } = await import("./test-helpers.server.js");
+  const described = await rpcReq<{ session: { key: string; sessionId: string } | null }>(
+    ws,
+    "sessions.describe",
+    { key: "agent:main:main" },
+  );
+  expect(described.ok).toBe(true);
+  expect(described.payload?.session).toMatchObject({ key: "agent:main:main", sessionId });
 }
 
 function agentCommandCalls(): Array<[AgentCommandCall]> {

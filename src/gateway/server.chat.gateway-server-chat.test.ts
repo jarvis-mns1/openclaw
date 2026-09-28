@@ -34,8 +34,10 @@ import {
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
+  expectMainSessionReady,
   observeAgentRunCompletion,
   observeChatRunCompletion,
+  seedCompletedAgentRun,
   withMainSessionStore,
 } from "./agent-command.test-helpers.js";
 import { waitForFast } from "./client.test-support.js";
@@ -2467,7 +2469,7 @@ describe("gateway server chat", () => {
             callbackFinished.resolve();
           }
         },
-        { settleRequest: dispatch.join },
+        { settleRequest: dispatch.settle },
       );
       const completion = Promise.allSettled([fixture]);
       try {
@@ -2497,21 +2499,13 @@ describe("gateway server chat", () => {
   test("agent.wait ignores stale agent snapshots while same-runId chat.send is active", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-active-vs-stale-agent";
-      const seedAgentRes = await rpcReq(ws, "agent", {
+      await seedCompletedAgentRun(ws, {
+        runId,
         sessionKey: "agent:main:stale-wait-snapshot",
         message: "seed stale agent snapshot",
-        idempotencyKey: runId,
       });
-      expect(seedAgentRes.ok).toBe(true);
-      expect(seedAgentRes.payload?.status).toBe("accepted");
 
-      const seedWaitRes = await rpcReq(ws, "agent.wait", {
-        runId,
-        timeoutMs: 1_000,
-      });
-      expect(seedWaitRes.ok).toBe(true);
-      expect(seedWaitRes.payload?.status).toBe("ok");
-
+      await using dispatch = await observeChatRunCompletion(runId);
       const releaseBlockedReply = mockBlockedChatReply();
 
       try {
@@ -2526,6 +2520,7 @@ describe("gateway server chat", () => {
         await abortChatRun(runId);
       } finally {
         releaseBlockedReply();
+        await dispatch.settle();
       }
     });
   });
@@ -2533,6 +2528,7 @@ describe("gateway server chat", () => {
   test("agent.wait ignores lifecycle completion while same-runId chat.send is active", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-active-with-agent-lifecycle";
+      await using dispatch = await observeChatRunCompletion(runId);
       const blockedReply = createDeferred();
       const runtimeStarted = createDeferred();
       mockGetReplyFromConfigOnce(async (_ctx, opts) => {
@@ -2562,6 +2558,7 @@ describe("gateway server chat", () => {
         await sendChatAndExpectStarted(runId, "hold chat run open");
         // The ACK precedes dispatch; emit lifecycle only after the runtime owns this run.
         await runtimeStarted.promise;
+        await expectMainSessionReady(ws);
 
         const terminalSessionChange = onceMessage(
           ws,
@@ -2620,6 +2617,7 @@ describe("gateway server chat", () => {
         });
       } finally {
         blockedReply.resolve();
+        await dispatch.settle();
       }
     });
   });

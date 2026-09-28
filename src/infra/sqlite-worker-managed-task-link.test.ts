@@ -424,7 +424,12 @@ describe("registered async managed child linkage", () => {
   ] as const)(
     "includes a committed worker link in $completion finalization before its receipt (reuse: $reuse)",
     async ({ completion, reuse }) => {
-      const backing = createBacking();
+      const uuid = vi
+        .spyOn(crypto, "randomUUID")
+        .mockReturnValueOnce("ffffffff-ffff-4fff-8fff-ffffffffffff");
+      // Restored projections sort by creation time, then ID; make chronology explicit.
+      const backing = createBacking({ startedAt: 99 });
+      uuid.mockRestore();
       const runtime = createPluginRuntime();
       const managed = runtime.tasks.async.managedFlows.bindSession({ sessionKey: ownerKey });
       const flow = await managed.createManaged({
@@ -484,6 +489,12 @@ describe("registered async managed child linkage", () => {
         }
         if (reuse) {
           expect(receipt).toMatchObject({ task: { taskId: reusedId } });
+        } else {
+          expect(receipt.task.createdAt).toBeGreaterThan(backing.createdAt);
+          expect([receipt.task.taskId, backing.taskId].toSorted()).toEqual([
+            receipt.task.taskId,
+            backing.taskId,
+          ]);
         }
         expect(listTasksForFlowId(flow.flowId)).toMatchObject([
           { status: "succeeded", endedAt: 200 },
