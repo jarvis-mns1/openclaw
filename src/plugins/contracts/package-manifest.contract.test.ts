@@ -87,7 +87,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "voice-call", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "whatsapp",
-    pluginLocalRuntimeDeps: ["audio-decode", "baileys"],
+    pluginLocalRuntimeDeps: ["audio-decode", "baileys", "sharp"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "xiaomi", minHostVersionBaseline: "2026.7.2" },

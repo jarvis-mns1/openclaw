@@ -36,7 +36,7 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
   [
     "extensions/whatsapp",
     // Baileys loads these optional peers for media decoding and thumbnails.
-    new Set(["audio-decode", "jimp"]),
+    new Set(["audio-decode", "jimp", "sharp"]),
   ],
   [
     "extensions/memory-lancedb",
