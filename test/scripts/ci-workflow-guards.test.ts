@@ -751,10 +751,6 @@ function readBuildArtifactsTestboxWorkflow() {
   return parse(readFileSync(".github/workflows/ci-build-artifacts-testbox.yml", "utf8"));
 }
 
-function readTestboxWorkflow() {
-  return parse(readFileSync(".github/workflows/ci-check-testbox.yml", "utf8"));
-}
-
 function readWorkflowSanityWorkflow() {
   return parse(readFileSync(".github/workflows/workflow-sanity.yml", "utf8"));
 }
@@ -1902,33 +1898,46 @@ NODE
     }
   });
 
-  it("keeps Testbox pull request validation off leased runner capacity", () => {
-    const workflow = readTestboxWorkflow();
+  it.each([
+    [
+      ".github/workflows/ci-check-testbox.yml",
+      "check",
+      "ubuntu-24.04",
+      "blacksmith-16vcpu-ubuntu-2404",
+    ],
+    [
+      ".github/workflows/ci-check-arm-testbox.yml",
+      "check-arm",
+      "ubuntu-24.04-arm",
+      "blacksmith-16vcpu-ubuntu-2404-arm",
+    ],
+  ])(
+    "keeps %s pull request validation off leased runner capacity",
+    (workflowPath, jobName, hostedRunner, testboxRunner) => {
+      const workflow = readWorkflow(workflowPath);
+      const job = workflow.jobs[jobName];
 
-    expect(workflow.on.pull_request).toEqual({
-      types: ["opened", "reopened", "synchronize", "ready_for_review"],
-      paths: [".github/workflows/**"],
-    });
-    expect(workflow.jobs.check.if).toBe(
-      "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
-    );
-    expect(workflow.jobs.check["runs-on"]).toBe(
-      "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
-    );
-    const beginStep = workflow.jobs.check.steps.find(
-      (step: { name?: string }) => step.name === "Begin Testbox",
-    );
-    const runStep = workflow.jobs.check.steps.find(
-      (step: { name?: string }) => step.name === "Run Testbox",
-    );
-    expect(beginStep).toMatchObject({
-      if: "github.event_name == 'workflow_dispatch'",
-      with: { testbox_id: "${{ inputs.testbox_id }}" },
-    });
-    expect(runStep).toMatchObject({
-      if: "github.event_name == 'workflow_dispatch' && always()",
-    });
-  });
+      expect(workflow.on.pull_request).toEqual({
+        types: ["opened", "reopened", "synchronize", "ready_for_review"],
+        paths: [".github/workflows/**"],
+      });
+      expect(job.if).toBe(
+        "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
+      );
+      expect(job["runs-on"]).toBe(
+        `\${{ github.event_name == 'pull_request' && '${hostedRunner}' || '${testboxRunner}' }}`,
+      );
+      const beginStep = job.steps.find((step: { name?: string }) => step.name === "Begin Testbox");
+      const runStep = job.steps.find((step: { name?: string }) => step.name === "Run Testbox");
+      expect(beginStep).toMatchObject({
+        if: "github.event_name == 'workflow_dispatch'",
+        with: { testbox_id: "${{ inputs.testbox_id }}" },
+      });
+      expect(runStep).toMatchObject({
+        if: "github.event_name == 'workflow_dispatch' && always()",
+      });
+    },
+  );
 
   it("keeps every path-filtered hosted gate runnable on landing-relevant events", () => {
     const workflows = [

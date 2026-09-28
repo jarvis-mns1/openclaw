@@ -59,7 +59,7 @@ describe("dependency guard workflow", () => {
     const parsed = readWorkflow();
 
     expect(workflow).toContain("pull_request_target:");
-    expect(workflow).toContain("checks trusted base script only; never checks out PR head");
+    expect(workflow).toContain("checks trusted workflow script only; never checks out PR head");
     expect(parsed.permissions).toEqual({
       contents: "read",
       "pull-requests": "write",
@@ -74,7 +74,7 @@ describe("dependency guard workflow", () => {
     expect(parsed.jobs?.["dependency-guard"]?.permissions).toBeUndefined();
   });
 
-  it("checks out only trusted base scripts and does not execute PR-controlled code", () => {
+  it("pairs trusted workflow scripts with their runtime without executing PR-controlled code", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
     const forbiddenSnippets = [
       "github.event.pull_request.head",
@@ -101,7 +101,8 @@ describe("dependency guard workflow", () => {
       const steps = job?.steps ?? [];
       const checkoutStep = workflowStep(steps, 0, `dependency guard checkout step ${index}`);
       expect(checkoutStep.uses).toBe("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1");
-      expect(checkoutStep.with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
+      expect(checkoutStep.with?.ref).toBe("${{ github.workflow_sha }}");
+      expect(checkoutStep.with?.ref).not.toBe("${{ github.event.pull_request.base.sha }}");
       expect(checkoutStep.with?.["persist-credentials"]).toBe(false);
       expect(steps.at(-1)?.run).toBe("node scripts/github/dependency-guard.mjs");
     }
@@ -172,7 +173,7 @@ describe("dependency guard workflow", () => {
     const checkoutStep = workflowStep(steps, 0, "final dependency guard checkout step");
     const runStep = workflowStep(steps, 1, "final dependency guard run step");
     expect(checkoutStep.uses).toBe("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1");
-    expect(checkoutStep.with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
+    expect(checkoutStep.with?.ref).toBe("${{ github.workflow_sha }}");
     expect(checkoutStep.with?.["persist-credentials"]).toBe(false);
     expect(runStep.run).toBe("node scripts/github/dependency-guard.mjs");
   });
