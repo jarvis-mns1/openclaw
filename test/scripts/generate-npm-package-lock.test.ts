@@ -1,8 +1,9 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 // Npm Package Lock Generator tests cover transient npm package-lock behavior.
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   applyPackageExtensionPeerMetadata,
@@ -26,6 +27,10 @@ import {
   shouldUseLegacyPeerDepsForNpmLock,
   npmLockPackageDirsForChangedPaths,
 } from "../../scripts/generate-npm-package-lock.mts";
+import {
+  registryPackages,
+  startStaticRegistry,
+} from "../../src/plugins/test-helpers/npm-registry-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -69,6 +74,102 @@ describe("generate-npm-package-lock", () => {
     expect(normalized).not.toHaveProperty("cpu");
     expect(normalized).not.toHaveProperty("libc");
     expect(normalized.dependencies).toEqual({ chalk: "5.6.2" });
+  });
+
+  it.each(["dependencies", "optionalDependencies", "peerDependencies"])(
+    "projects matching direct overrides into temporary %s without changing source policy",
+    (field) => {
+      const manifest = { [field]: { "smol-toml": "1.8.0" } };
+      const overrides = {
+        "smol-toml": { ".": "1.9.0", child: "2.0.0" },
+        "smol-toml@1.8.0": "1.9.0",
+      };
+      const before = structuredClone({ manifest, overrides });
+      const normalized = packageJsonForNpmLock(manifest, overrides);
+      expect(normalized[field]).toEqual({ "smol-toml": "1.9.0" });
+      expect(normalized.overrides).toEqual(overrides);
+      expect({ manifest, overrides }).toEqual(before);
+    },
+  );
+
+  it.each([
+    ["plain", { dep: "1.9.0" }, "1.9.0"],
+    ["range", { "dep@>=1 <2": "1.9.0" }, "1.8.0"],
+    ["nonmatching", { "dep@2": "2.1.0" }, "1.8.0"],
+    ["parent-only", { parent: { dep: "1.9.0" } }, "1.8.0"],
+    ["children-only", { "dep@1": { child: "2.0.0" }, dep: "1.9.0" }, "1.8.0"],
+    ["qualified-first", { "dep@1": "1.9.0", dep: "2.0.0" }, "1.8.0"],
+    ["nonmatching-before-bare", { "dep@2": "2.1.0", dep: "1.9.0" }, "1.9.0"],
+    ["reference", { dep: "$dep" }, "1.8.0"],
+    ["empty", { dep: "" }, "1.8.0"],
+    ["wildcard", { dep: "*" }, "1.8.0"],
+  ])("preserves direct override selector semantics (%s)", (_label, overrides, expected) => {
+    expect(
+      packageJsonForNpmLock({ dependencies: { dep: "1.8.0" } }, overrides).dependencies,
+    ).toEqual({ dep: expected });
+  });
+
+  it("validates a registry override through the real npm lock generator", async () => {
+    const root = tempDirs.make("openclaw-npm-direct-override-");
+    const packages = await registryPackages(root, [
+      { packageName: "fixture-dep", version: "1.9.0" },
+    ]);
+    const servers: Parameters<typeof startStaticRegistry>[1] = [];
+    try {
+      const registry = await startStaticRegistry(packages, servers);
+      const manifest = JSON.stringify({
+        name: "fixture-plugin",
+        version: "1.0.0",
+        dependencies: { "fixture-dep": "1.8.0" },
+      });
+      const overrides = { "fixture-dep@1.8.0": "1.9.0" };
+      const integrity = packages[0]?.versions[0]?.integrity;
+      expect(integrity).toMatch(/^sha512-/u);
+      writeFileSync(path.join(root, "package.json"), manifest);
+      writeFileSync(path.join(root, "pnpm-workspace.yaml"), JSON.stringify({ overrides }));
+      writeFileSync(
+        path.join(root, "pnpm-lock.yaml"),
+        JSON.stringify({
+          packages: { "fixture-dep@1.9.0": { resolution: { integrity } } },
+        }),
+      );
+      const script = `import { generateNpmPackageLock } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)}; console.log(generateNpmPackageLock(${JSON.stringify(root)}));`;
+      const result = await promisify(execFile)(
+        process.execPath,
+        ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
+        {
+          cwd: root,
+          env: {
+            ...process.env,
+            OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: root,
+            npm_config_registry: registry,
+            npm_config_cache: path.join(root, "cache"),
+            npm_config_userconfig: path.join(root, "user.npmrc"),
+            npm_config_globalconfig: path.join(root, "global.npmrc"),
+            npm_config_offline: "false",
+          },
+        },
+      );
+      const lock = JSON.parse(result.stdout);
+      expect(lock.packages[""].dependencies).toEqual({ "fixture-dep": "1.9.0" });
+      expect(lock.packages["node_modules/fixture-dep"]).toMatchObject({
+        version: "1.9.0",
+        integrity,
+      });
+      expect(readFileSync(path.join(root, "package.json"), "utf8")).toBe(manifest);
+      expect(JSON.parse(readFileSync(path.join(root, "pnpm-workspace.yaml"), "utf8"))).toEqual({
+        overrides,
+      });
+    } finally {
+      await Promise.all(
+        servers.map(
+          (server) =>
+            new Promise<void>((resolve) => {
+              server.close(() => resolve());
+            }),
+        ),
+      );
+    }
   });
 
   it("runs npm package-lock generation through cmd.exe for Windows npm shims", () => {

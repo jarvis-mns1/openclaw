@@ -70,7 +70,10 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       onDirty: () => {
         this.dirty = true;
       },
-      onChange: () => this.sync({ reason: "watch" }),
+      onChange: () => {
+        this.dirty = true;
+        return this.sync({ reason: "watch" });
+      },
       onUnavailable: () => {
         this.dirty = true;
       },

@@ -2,10 +2,29 @@
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { buildToolSearchRunPlan } from "./attempt-tool-search-run-plan.js";
 
 describe("buildToolSearchRunPlan", () => {
+  it.each(["tool_search", "tool_search_batch"])(
+    "keeps auto-added %s replayable without masking an empty explicit allowlist",
+    (name) => {
+      const plan = buildToolSearchRunPlan({
+        visibleTools: [createStubTool(name)],
+        uncompactedTools: [],
+        clientToolsCataloged: true,
+        catalogToolCount: 0,
+        controlsEnabled: true,
+        explicitAllowlistSources: [{ entries: ["missing_tool"] }],
+      });
+
+      expect([...plan.visibleAllowedToolNames]).toEqual([name]);
+      expect([...plan.replayAllowedToolNames]).toEqual([name]);
+      expect(plan.hasCallableTools).toBe(false);
+    },
+  );
+
   it("keeps compact visible names separate from replay-safe names", () => {
     // Visible compacted tools can be narrower than replay-safe names needed for
     // existing transcript tool calls.
@@ -156,18 +175,21 @@ describe("buildToolSearchRunPlan", () => {
     expect(plan.hasCallableTools).toBe(false);
   });
 
-  it("keeps explicitly requested Tool Search controls callable", () => {
-    const plan = buildToolSearchRunPlan({
-      visibleTools: [{ name: "tool_search_code" }] as never,
-      uncompactedTools: [{ name: "tool_search_code" }] as never,
-      clientToolsCataloged: true,
-      catalogToolCount: 0,
-      controlsEnabled: true,
-      explicitAllowlistSources: [{ entries: ["tool_search_code"] }],
-    });
+  it.each(["tool_search_code", "tool_search_batch"])(
+    "keeps explicitly requested %s callable",
+    (name) => {
+      const plan = buildToolSearchRunPlan({
+        visibleTools: [{ name }] as never,
+        uncompactedTools: [{ name }] as never,
+        clientToolsCataloged: true,
+        catalogToolCount: 0,
+        controlsEnabled: true,
+        explicitAllowlistSources: [{ entries: [name] }],
+      });
 
-    expect(plan.hasCallableTools).toBe(true);
-  });
+      expect(plan.hasCallableTools).toBe(true);
+    },
+  );
 
   it("keeps uncataloged directory-mode client tools visible", () => {
     const plan = buildToolSearchRunPlan({

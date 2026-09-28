@@ -9,7 +9,7 @@ import {
   projectAgentToolActivity,
   type AgentPatchSummaryEventData,
 } from "../infra/agent-activity-events.js";
-import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
+import type { AgentApprovalEventData } from "../infra/agent-events.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { projectProgressCardChannelUpdate } from "../session-cards/progress-card-channel-summary.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
@@ -72,6 +72,7 @@ import {
   buildToolCallSummary,
   buildToolStartKey,
   emitAgentEventCallbackBestEffort,
+  emitToolHandlerAgentEvent,
   emitToolActivityEvent,
   emitTrackedItemEvent,
   isExecToolName,
@@ -428,7 +429,7 @@ export async function handleToolExecutionEnd(
         ...planUpdate,
       },
     };
-    emitAgentEvent({ runId: ctx.params.runId, ...planEvent });
+    emitToolHandlerAgentEvent(ctx, planEvent);
     emitAgentEventCallbackBestEffort(ctx, planEvent);
   }
 
@@ -450,8 +451,7 @@ export async function handleToolExecutionEnd(
     ...(errorMessage ? { error: errorMessage } : {}),
   };
   const hideFromChannelProgress = explicitHideFromChannelProgress;
-  emitAgentEvent({
-    runId: ctx.params.runId,
+  emitToolHandlerAgentEvent(ctx, {
     stream: "tool",
     data: {
       phase: "result",

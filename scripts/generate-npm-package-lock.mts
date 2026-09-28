@@ -642,6 +642,45 @@ function packageJsonForNpmLock(
     Object.keys(localOverrides).length + Object.keys(overrides).length > 0
       ? { ...localOverrides, ...overrides }
       : undefined;
+  // pnpm allows overrides to replace direct dependency specs; npm rejects that
+  // with EOVERRIDE. Project a winning bare lock pin into this temporary manifest;
+  // rewriting qualified rules could stop their child policies matching the edge.
+  // Leave those rules and the final lock membership/integrity checks unchanged.
+  for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+    const dependencies = recordAt(normalized, field);
+    if (!dependencies) {
+      continue;
+    }
+    normalized[field] = Object.fromEntries(
+      Object.entries(dependencies).map(([name, spec]) => {
+        if (typeof spec !== "string" || !semver.validRange(spec)) {
+          return [name, spec];
+        }
+        const rule = Object.entries(overrides).find(([selector]) => {
+          if (selector === name) {
+            return true;
+          }
+          const parsed = parsePnpmPackageKey(selector);
+          return (
+            parsed?.name === name &&
+            semver.validRange(parsed.version) &&
+            semver.intersects(spec, parsed.version)
+          );
+        });
+        const value = rule?.[0] === name ? rule[1] : undefined;
+        const ownSpec = isRecord(value) ? value["."] : value;
+        return [
+          name,
+          typeof ownSpec === "string" &&
+          ownSpec !== "" &&
+          ownSpec !== "*" &&
+          !ownSpec.startsWith("$")
+            ? ownSpec
+            : spec,
+        ];
+      }),
+    );
+  }
   return normalized;
 }
 

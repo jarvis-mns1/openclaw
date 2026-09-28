@@ -340,6 +340,7 @@ describe("applyAgentToolSurfaceCatalog", () => {
       "tool_search",
       "tool_describe",
       "tool_call",
+      "tool_search_batch",
     ]);
     expect(result.catalogToolCount).toBe(1);
     expect(config.tools).toBeUndefined();

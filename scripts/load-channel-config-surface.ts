@@ -1,8 +1,8 @@
 // Load Channel Config Surface script supports OpenClaw repository automation.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { createJiti } from "jiti";
 import { buildChannelConfigSchema } from "../src/channels/plugins/config-schema.js";
+import { createJiti } from "../src/plugins/jiti-factory.js";
 import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,

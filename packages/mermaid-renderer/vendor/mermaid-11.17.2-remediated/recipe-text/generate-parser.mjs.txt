@@ -1,0 +1,70 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readFile, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { generate } from 'langium-cli';
+
+export async function generateParser(outputDirectory) {
+  const cliEntry = import.meta.resolve('langium-cli');
+  const schemaUrl = new URL('../langium-config-schema.json', cliEntry);
+  const schemaBytes = await readFile(schemaUrl);
+  const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+  assert.equal(hash(schemaBytes), '0ee8415e12e66b8625547f442a9c4fbdc082c97ef924c00338b65ecddfaa4ee7');
+  const { schema: schemaPromise } = await import(new URL('./generator/node-util.js', cliEntry).href);
+  const schema = await schemaPromise;
+  const original = structuredClone(schema);
+  const originalNonIdHash = hash(JSON.stringify(original));
+  assert.deepEqual(schema, JSON.parse(schemaBytes));
+  assert(!Object.hasOwn(schema, '$id') && !Object.hasOwn(schema, 'id'));
+  const refs = [];
+  const visit = (value, location = '') => {
+    if (!value || typeof value !== 'object') return;
+    if (typeof value.$ref === 'string') {
+      assert(value.$ref.startsWith('#/'), `Non-fragment schema reference at ${location}`);
+      refs.push({ path: `${location}/$ref`, value: value.$ref });
+    }
+    assert(typeof value.$id !== 'string' && typeof value.id !== 'string', 'Unexpected nested schema identifier');
+    for (const [key, child] of Object.entries(value)) visit(child, `${location}/${key}`);
+  };
+  visit(schema);
+  assert.equal(refs.length, 3);
+  const require = createRequire(cliEntry);
+  const { validate } = require('jsonschema');
+  assert.equal(require('jsonschema/package.json').version, '1.5.0');
+  const config = JSON.parse(await readFile('packages/parser/langium-config.json', 'utf8'));
+  assert.throws(() => validate(config, schema, { nestedErrors: true }), { code: 'ERR_INVALID_URL' });
+
+  // jsonschema 1.5.0 needs an absolute base for this otherwise unchanged schema.
+  schema.$id = 'file:///mermaid-remediation/langium-config-schema.json';
+  const { $id, ...nonIdSchema } = schema;
+  assert.equal(hash(JSON.stringify(nonIdSchema)), originalNonIdHash);
+  const checks = [];
+  try {
+    assert.equal(validate(config, schema, { nestedErrors: true }).valid, true);
+    const invalids = [
+      ['root-type', { ...config, projectName: 42 }],
+      ['missing-required-grammar', { ...config, languages: [{ id: 'proof' }] }],
+      ['referenced-property-type', { ...config, languages: [{ ...config.languages[0], chevrotainParserConfig: { maxLookahead: 'invalid' } }] }],
+      ['unknown-language-property', { ...config, languages: [{ ...config.languages[0], unexpected: true }] }],
+    ];
+    for (const [name, invalid] of invalids) {
+      const result = validate(invalid, schema, { nestedErrors: true });
+      assert.equal(result.valid, false, `${name} must still fail schema validation`);
+      assert(result.errors.length > 0);
+      checks.push({ name, valid: result.valid, errors: result.errors.map(({ path, name, message }) => ({ path, name, message })) });
+    }
+    const negativePath = new URL('invalid-langium-config.json', outputDirectory);
+    await writeFile(negativePath, `${JSON.stringify(invalids[0][1], null, 2)}\n`);
+    assert.equal(await generate({ file: fileURLToPath(negativePath) }), false, 'CLI must reject invalid config before generating');
+    assert.equal(await generate({ file: './packages/parser/langium-config.json' }), true, 'Grammar generation must succeed');
+  } finally {
+    delete schema.$id;
+    assert.deepEqual(schema, original, 'Schema must be restored after generation');
+    assert.equal(hash(JSON.stringify(schema)), originalNonIdHash);
+  }
+  const proof = { schemaSha256: hash(schemaBytes), absoluteId: $id, nonIdSchemaSha256: originalNonIdHash,
+    adapter: 'Temporary absolute root $id only; all original validation retained',
+    refs, checks, invalidCliRejected: true, generated: true, schemaRestored: true };
+  await writeFile(new URL('parser-generation-proof.json', outputDirectory), `${JSON.stringify(proof, null, 2)}\n`);
+}

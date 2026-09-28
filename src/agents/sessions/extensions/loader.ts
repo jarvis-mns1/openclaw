@@ -23,6 +23,7 @@ import * as bundledTypeboxType from "typebox/type";
 import * as bundledTypeboxValue from "typebox/value";
 import * as bundledAgentCore from "../../../plugin-sdk/agent-core.js";
 import * as bundledLlm from "../../../plugin-sdk/llm.js";
+import { disableJitiInputSourceMaps } from "../../../plugins/jiti-factory.js";
 import { installOpenClawInternalCorePackageNativeResolver } from "../../../plugins/plugin-sdk-native-resolver.js";
 import {
   buildPluginLoaderAliasMap,
@@ -455,6 +456,7 @@ async function loadExtensionSourceTransformModule(
       tryNative: false,
       moduleCache: false,
     });
+    disableJitiInputSourceMaps(context.sourceTransformLoader);
   }
 
   return resolveExtensionFactory(

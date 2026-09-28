@@ -1,0 +1,43 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { gzipSync } from 'node:zlib';
+import { build } from 'esbuild';
+import { generateParser } from './generate-parser.mjs';
+import { getBuildConfig, defaultOptions } from './.esbuild/util.ts';
+
+assert.equal(process.env.MERMAID_COVERAGE, undefined, 'Coverage instrumentation is not permitted');
+const source = JSON.parse(await readFile('source-receipt.json', 'utf8'));
+assert.equal(source.sourceCommit, 'dcb694ddb58dc5ad3502e7e903cac05fd812eac3');
+const output = resolve('artifact');
+await mkdir(output, { recursive: true });
+await generateParser(pathToFileURL(`${output}/`));
+const config = getBuildConfig({
+  ...defaultOptions, minify: true, core: false, format: 'iife', metafile: true,
+  includeLargeFeatures: true, profiling: false,
+  options: { name: 'mermaid', packageName: 'mermaid', file: 'mermaid.ts' },
+  outdir: output,
+  alias: { '@mermaid-js/parser': resolve('packages/parser/src/index.ts') },
+});
+const result = await build(config);
+assert(result.metafile);
+await writeFile(resolve(output, 'metafile.json'), `${JSON.stringify(result.metafile, null, 2)}\n`);
+const bytes = await readFile(resolve(output, 'mermaid.min.js'));
+// OC's canonical pako sidecar uses these parameters. Verify it separately too.
+const gzipBytes = gzipSync(bytes, { level: 9, memLevel: 7 }).length;
+const summary = {
+  sourceCommit: source.sourceCommit,
+  node: process.version,
+  esbuild: JSON.parse(await readFile('node_modules/esbuild/package.json', 'utf8')).version,
+  sha256: createHash('sha256').update(bytes).digest('hex'),
+  bytes: bytes.length, gzipBytes, gzipKiB: gzipBytes / 1024, gzipBudgetBytes: 960 * 1024,
+  compression: 'Node zlib level9/memLevel7; OC canonical pako3.0.2 legacyHash proof also required',
+  budgetPassed: gzipBytes <= 960 * 1024,
+  sourceInputs: Object.keys(result.metafile.inputs).length,
+  sourceReceiptSha256: createHash('sha256').update(await readFile('source-receipt.json')).digest('hex'),
+};
+await writeFile(resolve(output, 'build-summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
+console.log(JSON.stringify(summary, null, 2));
+assert(summary.budgetPassed, 'Existing OC Mermaid 960 KiB gzip budget exceeded; do not integrate or raise it');

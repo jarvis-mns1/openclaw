@@ -915,6 +915,47 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
+  it.each([true, false])(
+    "stripes full hosted Gateway plans without changing coverage (release runtime: %s)",
+    (includeReleaseOnlyRuntimeTests) => {
+      const owner = "agentic-gateway-server-isolated";
+      const options = {
+        includeReleaseOnlyPluginShards: false,
+        includeReleaseOnlyRuntimeTests,
+      };
+      const ordinary = createNodeTestShardBundles({ ...options, runnerBackend: "blacksmith" });
+      const hosted = createNodeTestShardBundles({ ...options, runnerBackend: "github" });
+      const parent = expectDefined(
+        ordinary.find((shard) => shard.shardName === owner),
+        "full Gateway owner",
+      );
+      const children = hosted.filter((shard) => shard.shardName.startsWith(`${owner}-hosted-`));
+      expect(children.length).toBeGreaterThan(1);
+      const files = children.flatMap((shard) => shard.includePatterns ?? []);
+      expect(new Set(files).size).toBe(files.length);
+      expect(files.toSorted()).toEqual(
+        (
+          parent.includePatterns ?? [
+            ...gatewayServerIsolatedTestFiles,
+            ...gatewayDatabaseWorkerTestFiles,
+          ]
+        ).toSorted(),
+      );
+      for (const child of children) {
+        expect(child.configs).toEqual(parent.configs);
+        expect(child.env).toEqual(parent.env);
+        expect(child.runner).toBe(parent.runner);
+        expect(child.requiresDist).toBe(parent.requiresDist);
+        expect(child.includePatterns?.length).toBeGreaterThan(0);
+        expect(child.checkName).toBe(`checks-node-${child.shardName}`);
+        expect(child.timing_key).toContain(`${owner}#selector-`);
+      }
+      expect(hosted.filter((shard) => !children.includes(shard))).toEqual(
+        ordinary.filter((shard) => shard !== parent),
+      );
+    },
+  );
+
   it("retains isolated Gateway timing history recorded under its former job cap", () => {
     const owner = "agentic-gateway-server-isolated";
     const configs = [

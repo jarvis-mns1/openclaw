@@ -98,19 +98,19 @@ import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { abortChatRunById, registerChatAbortController } from "./chat-abort.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
+  agentBroadcastCalls,
+  chatBroadcastCalls,
+  chatDeltaTexts,
+  createAgentEventHarnessFactory,
+  emitRun1AssistantText,
+} from "./server-chat.agent-events-harness.test-support.js";
+import {
   emitAgentEvent,
   emitAgentEvents,
   registerChatRun,
   registerNamedChatRun,
 } from "./server-chat.agent-events.test-helpers.js";
-import {
-  createAgentEventHandler,
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createChatAbortMarker,
-  createSessionMessageSubscriberRegistry,
-  type AgentEventHandlerOptions,
-} from "./server-chat.js";
+import { createChatAbortMarker, type AgentEventHandlerOptions } from "./server-chat.js";
 import { broadcastChatError, broadcastChatFinal } from "./server-methods/chat-broadcast.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -162,87 +162,10 @@ describe("agent event handler", () => {
     resetAgentEventsForTest({ preserveListeners: true });
   });
 
-  function createHarness(params?: {
-    now?: number;
-    resolveSessionKeyForRun?: (runId: string, options?: { agentId?: string }) => string | undefined;
-    lifecycleErrorRetryGraceMs?: number;
-    isChatSendRunActive?: (runId: string) => boolean;
-    clearTrackedActiveRun?: AgentEventHandlerOptions["clearTrackedActiveRun"];
-    settleTrackedTerminal?: AgentEventHandlerOptions["settleTrackedTerminal"];
-    trackTrackedRunTerminalPersistence?: AgentEventHandlerOptions["trackTrackedRunTerminalPersistence"];
-    resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
-    updateRunToolErrorSummary?: AgentEventHandlerOptions["updateRunToolErrorSummary"];
-    resolveSessionActiveRunState?: AgentEventHandlerOptions["resolveSessionActiveRunState"];
-  }) {
-    const nowSpy =
-      params?.now === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(params.now);
-    const broadcast = vi.fn();
-    const broadcastToConnIds = vi.fn();
-    const nodeSendToSession = vi.fn();
-    const nodeHasSessionSubscribers = vi.fn(() => true);
-    const clearAgentRunContext = vi.fn();
-    const clearTrackedActiveRun =
-      vi.fn<NonNullable<AgentEventHandlerOptions["clearTrackedActiveRun"]>>();
-    const agentRunSeq = new Map<string, number>();
-    const chatRunState = createChatRunState();
-    const toolEventRecipients = chatRunState.toolEventRecipients;
-    const sessionEventSubscribers = createSessionEventSubscriberRegistry();
-    const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
-
-    const handler = createAgentEventHandler({
-      broadcast,
-      broadcastToConnIds,
-      nodeSendToSession,
-      nodeHasSessionSubscribers,
-      agentRunSeq,
-      chatRunState,
-      resolveSessionKeyForRun: params?.resolveSessionKeyForRun ?? (() => undefined),
-      clearAgentRunContext,
-      toolEventRecipients,
-      sessionEventSubscribers,
-      sessionMessageSubscribers,
-      loadGatewaySessionLifecycleSnapshotForEvent: loadGatewaySessionLifecycleSnapshotMock,
-      persistGatewaySessionLifecycleEventForEvent: persistGatewaySessionLifecycleEventMock,
-      lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
-      isChatSendRunActive: params?.isChatSendRunActive,
-      clearTrackedActiveRun: params?.clearTrackedActiveRun ?? clearTrackedActiveRun,
-      settleTrackedTerminal: params?.settleTrackedTerminal,
-      trackTrackedRunTerminalPersistence: params?.trackTrackedRunTerminalPersistence,
-      resolveActiveLifecycleGenerationForRun: params?.resolveActiveLifecycleGenerationForRun,
-      updateRunToolErrorSummary: params?.updateRunToolErrorSummary,
-      resolveSessionActiveRunState: params?.resolveSessionActiveRunState,
-    });
-
-    return {
-      nowSpy,
-      broadcast,
-      broadcastToConnIds,
-      nodeSendToSession,
-      nodeHasSessionSubscribers,
-      clearAgentRunContext,
-      clearTrackedActiveRun,
-      agentRunSeq,
-      chatRunState,
-      toolEventRecipients,
-      sessionEventSubscribers,
-      sessionMessageSubscribers,
-      handler,
-    };
-  }
-
-  function emitRun1AssistantText(
-    harness: ReturnType<typeof createHarness>,
-    text: string,
-    field: "text" | "delta" = "text",
-    managedMediaUrls?: string[],
-  ): ReturnType<typeof createHarness> {
-    registerChatRun(harness.chatRunState, "run-1", "session-1", "client-1");
-    emitAgentEvent(harness.handler, "run-1", "assistant", {
-      [field]: text,
-      ...(managedMediaUrls ? { managedMediaUrls } : {}),
-    });
-    return harness;
-  }
+  const createHarness = createAgentEventHarnessFactory({
+    loadGatewaySessionLifecycleSnapshotForEvent: loadGatewaySessionLifecycleSnapshotMock,
+    persistGatewaySessionLifecycleEventForEvent: persistGatewaySessionLifecycleEventMock,
+  });
 
   function mockSessionEntry(
     entry: ReturnType<typeof loadSessionEntry>["entry"],
@@ -258,21 +181,6 @@ describe("agent event handler", () => {
       storeKeys: [canonicalKey],
       legacyKey: undefined,
     });
-  }
-
-  function chatBroadcastCalls(broadcast: ReturnType<typeof vi.fn>) {
-    return broadcast.mock.calls.filter(([event]) => event === "chat");
-  }
-
-  function chatDeltaTexts(broadcast: ReturnType<typeof vi.fn>) {
-    return chatBroadcastCalls(broadcast)
-      .map(([, payload]) => payload as { state?: string; deltaText?: string })
-      .filter((payload) => payload.state === "delta")
-      .map((payload) => payload.deltaText);
-  }
-
-  function agentBroadcastCalls(broadcast: ReturnType<typeof vi.fn>) {
-    return broadcast.mock.calls.filter(([event]) => event === "agent");
   }
 
   function answerCandidate(
@@ -6085,6 +5993,85 @@ describe("agent event handler", () => {
       runId: "run-recovery",
     });
   });
+
+  it.each(["clear", "release"] as const)(
+    "routes subscribed tool and plan producers to their original agent after context %s",
+    async (cleanup) => {
+      const runId = "run-subscribed-owned-tools";
+      const sessionKey = "agent:work:original";
+      const agentId = "work";
+      const resolveSessionKeyForRun = vi.fn(
+        (_runId: string, options?: { agentId?: string }) =>
+          `agent:${options?.agentId ?? "main"}:replacement`,
+      );
+      const { broadcast, broadcastToConnIds, toolEventRecipients, handler } = createHarness({
+        resolveSessionKeyForRun,
+      });
+      const claimId = claimAgentRunContext(
+        runId,
+        { agentId, sessionKey },
+        { trackOwner: true, ownsContext: true },
+      );
+      const { emit, subscription } = createSubscribedSessionHarness({ runId, agentId, sessionKey });
+      if (cleanup === "clear") {
+        clearRegisteredAgentRunContext(runId);
+      }
+      releaseAgentRunContext(runId, claimId);
+      registerAgentRunContext("replacement-run", {
+        agentId: "main",
+        sessionKey: "agent:main:replacement",
+      });
+      toolEventRecipients.add(runId, "conn-work");
+      toolEventRecipients.add("replacement-run", "conn-main");
+      const stop = onAgentRuntimeEvent(handler);
+      try {
+        const toolName = "progress_card";
+        const toolCallId = "subscribed-owned-card";
+        const args = {
+          markdown: "Inspecting",
+          plan: [{ step: "Inspect", status: "in_progress" }],
+        };
+        emit({ type: "tool_execution_start", toolName, toolCallId, args });
+        emit({
+          type: "tool_execution_update",
+          toolName,
+          toolCallId,
+          args,
+          partialResult: { content: [{ type: "text", text: "fixture-progress" }] },
+        });
+        emit({
+          type: "tool_execution_end",
+          toolName,
+          toolCallId,
+          isError: false,
+          result: { content: [{ type: "text", text: "fixture-result" }] },
+        });
+        await subscription.waitForPendingEvents();
+
+        const tools = broadcastToConnIds.mock.calls.filter(
+          ([eventName, payload]) => eventName === "agent" && payload.stream === "tool",
+        );
+        expect(tools.map(([, payload]) => payload.data.phase)).toEqual([
+          "start",
+          "update",
+          "result",
+        ]);
+        for (const [, payload, recipients, options] of tools) {
+          expect(payload).toMatchObject({ runId, sessionKey, agentId });
+          expect(recipients).toEqual(new Set(["conn-work"]));
+          expect(options.sessionKeys).toEqual([sessionKey]);
+        }
+        const plans = agentBroadcastCalls(broadcast).filter(([, event]) => event.stream === "plan");
+        expect(plans).toHaveLength(1);
+        expect(plans[0]?.[1]).toMatchObject({ runId, sessionKey, agentId });
+        expect(plans[0]?.[2]).toMatchObject({ sessionKeys: [sessionKey] });
+        expect(resolveSessionKeyForRun).not.toHaveBeenCalled();
+      } finally {
+        stop();
+        subscription.unsubscribe();
+      }
+    },
+  );
 
   it.each([
     ["assistant", { text: "owned reply", delta: "owned reply", phase: "commentary" }],

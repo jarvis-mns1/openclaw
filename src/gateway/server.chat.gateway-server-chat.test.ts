@@ -21,6 +21,7 @@ import {
 import { createSafeGatewayRestartPreflight } from "../infra/restart-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   isGatewaySubordinateWorkAdmissionClosed,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -32,6 +33,14 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  expectMainSessionReady,
+  observeAgentRunCompletion,
+  observeChatRunCompletion,
+  seedCompletedAgentRun,
+  withMainSessionStore,
+} from "./agent-command.test-helpers.js";
+import { waitForFast } from "./client.test-support.js";
 import * as sessionLifecycleState from "./session-lifecycle-state.js";
 import { removeChatTestDirectory as removeTempDir } from "./session-test-directories.test-support.js";
 import {
@@ -92,13 +101,6 @@ function hasGatewayHistoryMessageToolMirror(message: unknown) {
 installGatewayTestHooks({ scope: "suite" });
 const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
 
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
-
 let ws: WebSocket;
 let port: number;
 
@@ -141,33 +143,6 @@ describe("gateway server chat", () => {
       { agentId: "main", sessionId: "sess-main", sessionKey: "main", storePath },
       events,
     );
-  };
-
-  const withMainSessionStore = async <T>(
-    run: (dir: string) => Promise<T>,
-    options?: { archivedAt?: number; sessionId?: string },
-  ): Promise<T> => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    try {
-      const sessionId = options?.sessionId ?? "sess-main";
-      testState.sessionStorePath = path.join(dir, "sessions.json");
-      await writeSessionStore({
-        entries: {
-          main: {
-            sessionId,
-            sessionFile: path.join(dir, `${sessionId}.jsonl`),
-            updatedAt: Date.now(),
-            ...(options?.archivedAt !== undefined ? { archivedAt: options.archivedAt } : {}),
-          },
-        },
-      });
-      return await run(dir);
-    } finally {
-      // Dispatch can outlive its RPC; keep its store selected until retained work settles.
-      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      testState.sessionStorePath = undefined;
-      await removeTempDir(dir);
-    }
   };
 
   const collectHistoryTextValues = (historyMessages: unknown[]) =>
@@ -1194,6 +1169,7 @@ describe("gateway server chat", () => {
       });
 
       vi.mocked(agentCommandMock).mockClear();
+      await using agentExecution = await observeAgentRunCompletion("idem-2");
       const agentAllowedRes = await rpcReq(ws, "agent", {
         sessionKey: "cron:job-1",
         message: "hi",
@@ -1202,8 +1178,9 @@ describe("gateway server chat", () => {
       expect(agentAllowedRes.ok).toBe(true);
       expect(agentAllowedRes.payload?.status).toBe("accepted");
       expect(agentAllowedRes.payload?.runId).toBe("idem-2");
-      await waitForFast(() => expect(agentCommandMock).toHaveBeenCalled());
-      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await agentExecution.completed;
+      expect(agentCommandMock).toHaveBeenCalled();
+      expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(0);
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
@@ -2469,6 +2446,7 @@ describe("gateway server chat", () => {
       const releaseDispatch = createDeferred();
       const callbackFinished = createDeferred();
       const callbackError = new Error("fixture callback failed");
+      await using dispatch = await observeChatRunCompletion(runId);
       let fixtureDir = "";
       let storePath = "";
       dispatchInboundMessageMock.mockImplementationOnce(async () => {
@@ -2476,20 +2454,23 @@ describe("gateway server chat", () => {
         await releaseDispatch.promise;
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
       });
-      const fixture = withMainSessionStore(async (dir) => {
-        fixtureDir = dir;
-        storePath = path.join(dir, "sessions.json");
-        try {
-          await sendChatAndExpectStarted(runId, "hold fixture dispatch open");
-          await dispatchStarted.promise;
-          if (outcome === "throw") {
-            throw callbackError;
+      const fixture = withMainSessionStore(
+        async (dir) => {
+          fixtureDir = dir;
+          storePath = path.join(dir, "sessions.json");
+          try {
+            await sendChatAndExpectStarted(runId, "hold fixture dispatch open");
+            await dispatchStarted.promise;
+            if (outcome === "throw") {
+              throw callbackError;
+            }
+            return "fixture result";
+          } finally {
+            callbackFinished.resolve();
           }
-          return "fixture result";
-        } finally {
-          callbackFinished.resolve();
-        }
-      });
+        },
+        { settleRequest: dispatch.settle },
+      );
       const completion = Promise.allSettled([fixture]);
       try {
         await callbackFinished.promise;
@@ -2518,21 +2499,13 @@ describe("gateway server chat", () => {
   test("agent.wait ignores stale agent snapshots while same-runId chat.send is active", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-active-vs-stale-agent";
-      const seedAgentRes = await rpcReq(ws, "agent", {
+      await seedCompletedAgentRun(ws, {
+        runId,
         sessionKey: "agent:main:stale-wait-snapshot",
         message: "seed stale agent snapshot",
-        idempotencyKey: runId,
       });
-      expect(seedAgentRes.ok).toBe(true);
-      expect(seedAgentRes.payload?.status).toBe("accepted");
 
-      const seedWaitRes = await rpcReq(ws, "agent.wait", {
-        runId,
-        timeoutMs: 1_000,
-      });
-      expect(seedWaitRes.ok).toBe(true);
-      expect(seedWaitRes.payload?.status).toBe("ok");
-
+      await using dispatch = await observeChatRunCompletion(runId);
       const releaseBlockedReply = mockBlockedChatReply();
 
       try {
@@ -2547,6 +2520,7 @@ describe("gateway server chat", () => {
         await abortChatRun(runId);
       } finally {
         releaseBlockedReply();
+        await dispatch.settle();
       }
     });
   });
@@ -2554,6 +2528,7 @@ describe("gateway server chat", () => {
   test("agent.wait ignores lifecycle completion while same-runId chat.send is active", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-active-with-agent-lifecycle";
+      await using dispatch = await observeChatRunCompletion(runId);
       const blockedReply = createDeferred();
       const runtimeStarted = createDeferred();
       mockGetReplyFromConfigOnce(async (_ctx, opts) => {
@@ -2583,6 +2558,7 @@ describe("gateway server chat", () => {
         await sendChatAndExpectStarted(runId, "hold chat run open");
         // The ACK precedes dispatch; emit lifecycle only after the runtime owns this run.
         await runtimeStarted.promise;
+        await expectMainSessionReady(ws);
 
         const terminalSessionChange = onceMessage(
           ws,
@@ -2641,6 +2617,7 @@ describe("gateway server chat", () => {
         });
       } finally {
         blockedReply.resolve();
+        await dispatch.settle();
       }
     });
   });

@@ -1,9 +1,11 @@
 // Extension loader tests cover SDK import resolution for jiti-loaded TypeScript
 // extensions.
-import { cp, writeFile } from "node:fs/promises";
+import fs from "node:fs";
+import { cp, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createJiti as createRawStaticJiti } from "jiti/static";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { clearExtensionCache, loadExtensionsCached } from "./loader.js";
 
@@ -46,6 +48,51 @@ export default async function(api) {
     expect(result.errors).toEqual([]);
     expect(result.extensions).toHaveLength(1);
     expect(result.extensions[0]?.commands.has("sdk-subpath-probe")).toBe(true);
+  });
+
+  it("registers a TypeScript extension without reading its automatic input source map", async () => {
+    const root = tempDirs.make("openclaw-extension-input-map-");
+    const dir = join(root, "plugin");
+    await mkdir(dir);
+    const extensionPath = join(dir, "extension.ts");
+    const mapPath = join(root, "synthetic-input.map");
+    await writeFile(
+      mapPath,
+      JSON.stringify({
+        version: 3,
+        sources: ["synthetic-original.ts"],
+        names: [],
+        mappings: "AAAA",
+        sourcesContent: ["SYNTHETIC_SESSION_INPUT_MAP_ONLY"],
+      }),
+    );
+    const source = [
+      "export default function(api) {",
+      "  const value: number = 42;",
+      '  api.registerCommand("input-map-probe", { description: String(value), handler() {} });',
+      "}",
+      `//# sourceMappingURL=${mapPath}`,
+      "",
+    ].join("\n");
+    await writeFile(extensionPath, source);
+
+    vi.stubEnv("JITI_FS_CACHE", "false");
+    const read = vi.spyOn(fs, "readFileSync");
+    try {
+      const raw = createRawStaticJiti(extensionPath, { fsCache: false, moduleCache: false });
+      raw.transform({ source, filename: extensionPath, ts: true });
+      expect(read.mock.calls.some(([file]) => String(file) === mapPath)).toBe(true);
+      read.mockClear();
+
+      const loaded = await loadExtensionsCached([extensionPath], dir);
+      expect(loaded.errors).toEqual([]);
+      expect(loaded.extensions).toHaveLength(1);
+      expect(loaded.extensions[0]?.commands.get("input-map-probe")?.description).toBe("42");
+      expect(read.mock.calls.filter(([file]) => String(file) === mapPath)).toEqual([]);
+    } finally {
+      read.mockRestore();
+      vi.unstubAllEnvs();
+    }
   });
 
   it.each([

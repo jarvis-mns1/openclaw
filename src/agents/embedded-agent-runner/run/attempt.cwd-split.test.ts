@@ -116,6 +116,7 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
         "process",
         "tool_search_code",
         "tool_search",
+        "tool_search_batch",
         "tool_describe",
         "tool_call",
       ],

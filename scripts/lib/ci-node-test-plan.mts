@@ -2947,6 +2947,29 @@ export function createNodeTestShardBundles(
 
   for (const shard of shards) {
     const runner = resolveCiNodeTestRunner(shard);
+    // Full fork/release plans need the same complete-file partition as compact
+    // hosted plans; the combined Gateway owner exceeds a hosted job's budget.
+    if (
+      options.runnerBackend === "github" &&
+      shard.shardName === "agentic-gateway-server-isolated"
+    ) {
+      const children = splitOversizedCompactGroup(
+        { ...shard, runner, shard_name: shard.shardName },
+        options.runnerBackend,
+      );
+      for (const { group } of children) {
+        unbundled.push({
+          ...shard,
+          runner,
+          checkName: formatNodeTestShardCheckName(group.shard_name),
+          shardName: group.shard_name,
+          timing_key: group.timing_key,
+          includePatterns: group.includePatterns,
+          pretestBuildMode: group.pretestBuildMode,
+        });
+      }
+      continue;
+    }
     const [config] = shard.configs;
     if (
       shard.requiresDist ||

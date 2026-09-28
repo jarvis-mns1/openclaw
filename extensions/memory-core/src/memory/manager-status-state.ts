@@ -1,10 +1,14 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import type {
-  MemoryProviderStatus,
-  MemorySource,
+import {
+  MEMORY_EMBEDDING_CACHE_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE,
+  type MemoryProviderStatus,
+  type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "openclaw/plugin-sdk/sqlite-runtime";
+import type { MemoryIndexDatabase } from "./manager-database-context.js";
+import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
 
 type StatusProvider = {
   id: string;
@@ -17,6 +21,46 @@ type StatusAggregateRow = {
   c: number;
   bytes: number | null;
 };
+
+export function collectMemoryCacheStatus(
+  db: Pick<DatabaseSync, "prepare">,
+  cache: { enabled: boolean; maxEntries?: number },
+  storage?: MemoryProviderStatus["storage"],
+): NonNullable<MemoryProviderStatus["cache"]> {
+  return cache.enabled
+    ? {
+        enabled: true,
+        entries:
+          storage?.embeddingCacheEntries ??
+          Number(
+            db.prepare(`SELECT COUNT(*) as c FROM ${MEMORY_EMBEDDING_CACHE_TABLE}`).get()?.c ?? 0,
+          ),
+        maxEntries: cache.maxEntries,
+      }
+    : { enabled: false, maxEntries: cache.maxEntries };
+}
+
+export function collectMemoryVectorStatus(
+  db: DatabaseSync,
+  vector: MemoryIndexDatabase["vector"],
+  hasSemanticChunks: boolean,
+): NonNullable<MemoryProviderStatus["vector"]> {
+  return {
+    enabled: vector.enabled,
+    index: resolvePersistedMemoryVectorIndexState({
+      db,
+      vectorTable: MEMORY_INDEX_VECTOR_TABLE,
+      metaVectorDims: vector.dims,
+      hasSemanticChunks,
+    }),
+    storeAvailable: vector.available ?? undefined,
+    semanticAvailable: vector.semanticAvailable,
+    available: vector.semanticAvailable,
+    extensionPath: vector.extensionPath,
+    loadError: vector.loadError,
+    dims: vector.dims,
+  };
+}
 
 /** Read only for explicit diagnostics: retained cache payloads can be large even when disabled. */
 export function collectMemoryStorageStatus(

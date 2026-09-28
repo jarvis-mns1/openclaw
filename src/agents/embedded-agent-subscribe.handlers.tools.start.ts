@@ -9,7 +9,9 @@ import {
   projectAgentToolActivity,
   type AgentItemEventData,
 } from "../infra/agent-activity-events.js";
+import { getAgentEventExecutionContext } from "../infra/agent-event-execution-context.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
@@ -285,6 +287,50 @@ export function emitAgentEventCallbackBestEffort(
   });
 }
 
+export function emitToolHandlerAgentEvent(
+  ctx: ToolHandlerContext,
+  event: Pick<Parameters<typeof emitAgentEvent>[0], "stream" | "data">,
+): void {
+  const origin = ctx.toolEventOrigin;
+  const current = origin ? getAgentRunContext(ctx.params.runId) : undefined;
+  const captured = origin
+    ? getAgentEventExecutionContext().getStore()?.routingByRun?.get(ctx.params.runId)
+    : undefined;
+  const originContext = origin?.context?.deref();
+  // Reuse the upstream weak owner identity even after its registration is collected.
+  const retainedOriginRouting =
+    origin &&
+    captured?.routing.lifecycleGeneration === origin.lifecycleGeneration &&
+    (captured.owner === origin.context ||
+      (originContext && captured.owner.deref() === originContext))
+      ? captured.routing
+      : undefined;
+  // Captured routing is not authority to emit into a replacement registration.
+  if (
+    (origin?.context && current && originContext !== current) ||
+    (captured && !retainedOriginRouting)
+  ) {
+    return;
+  }
+  const routing = current ?? retainedOriginRouting;
+  if (
+    origin?.isControlUiVisible === false &&
+    (routing?.isControlUiVisible !== false ||
+      routing.lifecycleGeneration !== origin.lifecycleGeneration)
+  ) {
+    // Keep late hidden observer traffic private; channel callbacks settle independently.
+    return;
+  }
+  const owner = origin ?? ctx.params;
+  emitAgentEvent({
+    ...event,
+    runId: ctx.params.runId,
+    ...(owner.sessionKey ? { sessionKey: owner.sessionKey } : {}),
+    ...(owner.agentId ? { agentId: owner.agentId } : {}),
+    ...(origin ? { lifecycleGeneration: origin.lifecycleGeneration } : {}),
+  });
+}
+
 type ActivityWithoutOwner<T = Parameters<typeof emitAgentActivityEvent>[0]> = T extends unknown
   ? Omit<T, "runId" | "sessionKey">
   : never;
@@ -508,8 +554,7 @@ export function handleToolExecutionStart(
     };
     const hideFromChannelProgress = evt.hideFromChannelProgress === true;
     emitTrackedItemEvent(ctx, itemData);
-    emitAgentEvent({
-      runId: ctx.params.runId,
+    emitToolHandlerAgentEvent(ctx, {
       stream: "tool",
       data: {
         phase: "start",

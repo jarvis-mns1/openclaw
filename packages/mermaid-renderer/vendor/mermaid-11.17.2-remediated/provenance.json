@@ -1,0 +1,489 @@
+{
+  "name": "Mermaid 11.17.2 independently rebuilt remediation artifact",
+  "upstreamOfficialArtifact": false,
+  "source": {
+    "repository": "https://github.com/mermaid-js/mermaid",
+    "tag": "mermaid@11.17.2",
+    "commit": "dcb694ddb58dc5ad3502e7e903cac05fd812eac3",
+    "blobManifestSha256": "b0fd3afef0cb09322c8be5a91bbb8a55e4ab72f3f82e8849bf372df8a876ed9a"
+  },
+  "graph": {
+    "packageVersions": 205,
+    "hostArchives": 180,
+    "lockSha256": "e8fd42c784d660d9cd56912c16051a8163188cba4fd2af42190beebbc6a648a6",
+    "manifestSha256": "96bdd7ea542b7cc85a24fa2ca8e1b84a69c491ea0558a8997e7c08b5aaf5aaad",
+    "workspaceSha256": "61b7006cc2f330d97e128baa42d7ffca8bb4cfd41378f0a358c21903c2da3df8",
+    "roughjsPatchSha256": "3543d47108cb41b68ec6a671c0e1f9d0cfe2ce524fea5b0992511ae84c3c6b64",
+    "inventorySha256": "a920a2722cb1cb86af8e0a6ac9b97033534f81fe843fd721a61b723058f3f65f"
+  },
+  "tools": {
+    "node": "26.9.0",
+    "sourceRequestedNode": "24.16.0",
+    "pnpm": "12.4.0",
+    "esbuild": "0.25.12",
+    "tsx": "4.20.6"
+  },
+  "sourceRecipe": {
+    "README.md": "85c778f6d84e115912e6650895184570d553cd6f9e835a33a9cc311380bea55e",
+    "prepare.mjs": "a91b46fa174049c6c0d8bf422ddd6ef921a63a6b6d47ad5245a2bcaa87cbac94",
+    "build.mts": "b4846554797d04477c4056099e9d491982a99207417cf158992695080dcf3406",
+    "generate-parser.mjs": "e71d6bcdecc87f913755f6783f4db31620005a956fc903397a372abe31966277",
+    "package.json": "96bdd7ea542b7cc85a24fa2ca8e1b84a69c491ea0558a8997e7c08b5aaf5aaad",
+    "pnpm-lock.yaml": "e8fd42c784d660d9cd56912c16051a8163188cba4fd2af42190beebbc6a648a6",
+    "pnpm-workspace.yaml": "61b7006cc2f330d97e128baa42d7ffca8bb4cfd41378f0a358c21903c2da3df8",
+    "patches/roughjs.patch": "3543d47108cb41b68ec6a671c0e1f9d0cfe2ce524fea5b0992511ae84c3c6b64"
+  },
+  "outputs": [
+    {
+      "file": "mermaid.min.js",
+      "bytes": 3480883,
+      "sha256": "8053618a9015411d8b50598605e7a1aa3a36b5880e085e5e2985fa2a4be621c0",
+      "identical": true
+    },
+    {
+      "file": "mermaid.min.js.map",
+      "bytes": 13619980,
+      "sha256": "71aa49c17d5d8744acb70a54e37ef864c7bae56e76b531d25c732d6337a4cad8",
+      "identical": true
+    },
+    {
+      "file": "metafile.json",
+      "bytes": 2361988,
+      "sha256": "06676773418a490669884d597333fa13eab2ca0157e274676f2e7a51e8569e0c",
+      "identical": true
+    },
+    {
+      "file": "parser-generation-proof.json",
+      "bytes": 2168,
+      "sha256": "ed066a988d02c21f4d73a9092ef7ee0f773a0fcd43f9a3320b7f0c629c1ed107",
+      "identical": true
+    }
+  ],
+  "canonicalGzip": {
+    "implementation": "pako@3.0.2",
+    "level": 9,
+    "legacyHash": true,
+    "memLevel": 7,
+    "bytes": 950043,
+    "kib": 927.7763671875,
+    "sha256": "f30fa1cbf5f4bffac58e714e3fcbb45a8a4e423ece2d34c77612227c44dd5083",
+    "baselineBytes": 974554,
+    "budgetBytes": 983040,
+    "passed": true
+  },
+  "compiledPackages": [
+    {
+      "name": "@braintree/sanitize-url",
+      "version": "7.1.2",
+      "license": "MIT"
+    },
+    {
+      "name": "@chevrotain/cst-dts-gen",
+      "version": "11.1.2",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "@chevrotain/gast",
+      "version": "11.1.2",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "@chevrotain/regexp-to-ast",
+      "version": "11.1.2",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "@chevrotain/utils",
+      "version": "11.1.2",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "@iconify/utils",
+      "version": "3.0.2",
+      "license": "MIT"
+    },
+    {
+      "name": "@upsetjs/venn.js",
+      "version": "2.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "chevrotain",
+      "version": "11.1.2",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "chevrotain-allstar",
+      "version": "0.3.1",
+      "license": "MIT"
+    },
+    {
+      "name": "cose-base",
+      "version": "1.0.3",
+      "license": "MIT"
+    },
+    {
+      "name": "cose-base",
+      "version": "2.2.0",
+      "license": "MIT"
+    },
+    {
+      "name": "cytoscape",
+      "version": "3.34.0",
+      "license": "MIT"
+    },
+    {
+      "name": "cytoscape-cose-bilkent",
+      "version": "4.1.0",
+      "license": "MIT"
+    },
+    {
+      "name": "cytoscape-fcose",
+      "version": "2.2.0",
+      "license": "MIT"
+    },
+    {
+      "name": "d3",
+      "version": "7.9.0",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-array",
+      "version": "3.2.4",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-array",
+      "version": "2.12.1",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "d3-axis",
+      "version": "3.0.0",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-brush",
+      "version": "3.0.0",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-chord",
+      "version": "3.0.1",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-color",
+      "version": "3.1.0",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-contour",
+      "version": "4.0.2",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-delaunay",
+      "version": "6.0.4",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-dispatch",
+      "version": "3.0.1",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-drag",
+      "version": "3.0.0",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-dsv",
+      "version": "3.0.1",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-ease",
+      "version": "3.0.1",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "d3-fetch",
+      "version": "3.0.1",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-force",
+      "version": "3.0.0",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-format",
+      "version": "3.1.0",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-geo",
+      "version": "3.1.1",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-hierarchy",
+      "version": "3.1.2",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-interpolate",
+      "version": "3.0.1",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-path",
+      "version": "3.1.0",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-path",
+      "version": "1.0.9",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "d3-polygon",
+      "version": "3.0.1",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-quadtree",
+      "version": "3.0.1",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-random",
+      "version": "3.0.1",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-sankey",
+      "version": "0.12.3",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "d3-scale",
+      "version": "4.0.2",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-scale-chromatic",
+      "version": "3.1.0",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-selection",
+      "version": "3.0.0",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-shape",
+      "version": "3.2.0",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-shape",
+      "version": "1.3.7",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "d3-time",
+      "version": "3.1.0",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-time-format",
+      "version": "4.1.0",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-timer",
+      "version": "3.0.1",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-transition",
+      "version": "3.0.1",
+      "license": "ISC"
+    },
+    {
+      "name": "d3-zoom",
+      "version": "3.0.0",
+      "license": "ISC"
+    },
+    {
+      "name": "dagre-d3-es",
+      "version": "7.0.14",
+      "license": "MIT"
+    },
+    {
+      "name": "dayjs",
+      "version": "1.11.21",
+      "license": "MIT"
+    },
+    {
+      "name": "debug",
+      "version": "4.4.3",
+      "license": "MIT"
+    },
+    {
+      "name": "delaunator",
+      "version": "5.0.1",
+      "license": "ISC"
+    },
+    {
+      "name": "dompurify",
+      "version": "3.4.16",
+      "license": "(MPL-2.0 OR Apache-2.0)"
+    },
+    {
+      "name": "es-toolkit",
+      "version": "1.45.1",
+      "license": "MIT"
+    },
+    {
+      "name": "fastdom",
+      "version": "1.0.12",
+      "license": "MIT"
+    },
+    {
+      "name": "internmap",
+      "version": "2.0.3",
+      "license": "ISC"
+    },
+    {
+      "name": "internmap",
+      "version": "1.0.1",
+      "license": "ISC"
+    },
+    {
+      "name": "js-yaml",
+      "version": "4.3.2",
+      "license": "MIT"
+    },
+    {
+      "name": "katex",
+      "version": "0.18.2",
+      "license": "MIT"
+    },
+    {
+      "name": "khroma",
+      "version": "2.1.0"
+    },
+    {
+      "name": "langium",
+      "version": "4.2.1",
+      "license": "MIT"
+    },
+    {
+      "name": "layout-base",
+      "version": "1.0.2",
+      "license": "MIT"
+    },
+    {
+      "name": "layout-base",
+      "version": "2.0.1",
+      "license": "MIT"
+    },
+    {
+      "name": "lodash-es",
+      "version": "4.18.1",
+      "license": "MIT"
+    },
+    {
+      "name": "marked",
+      "version": "16.3.0",
+      "license": "MIT"
+    },
+    {
+      "name": "ms",
+      "version": "2.1.3",
+      "license": "MIT"
+    },
+    {
+      "name": "robust-predicates",
+      "version": "3.0.2",
+      "license": "Unlicense"
+    },
+    {
+      "name": "roughjs",
+      "version": "4.6.6",
+      "license": "MIT"
+    },
+    {
+      "name": "stylis",
+      "version": "4.3.6",
+      "license": "MIT"
+    },
+    {
+      "name": "ts-dedent",
+      "version": "2.2.0",
+      "license": "MIT"
+    },
+    {
+      "name": "uuid",
+      "version": "14.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "vscode-jsonrpc",
+      "version": "8.2.0",
+      "license": "MIT"
+    },
+    {
+      "name": "vscode-languageserver-protocol",
+      "version": "3.17.5",
+      "license": "MIT"
+    },
+    {
+      "name": "vscode-languageserver-textdocument",
+      "version": "1.0.12",
+      "license": "MIT"
+    },
+    {
+      "name": "vscode-languageserver-types",
+      "version": "3.17.5",
+      "license": "MIT"
+    },
+    {
+      "name": "vscode-uri",
+      "version": "3.1.0",
+      "license": "MIT"
+    }
+  ],
+  "tests": {
+    "chromiumCases": 32,
+    "passed": true,
+    "browserVersion": "151.0.7922.34",
+    "pairedAssetProof": "Unmodified official OC9.6 renderer/frame; outer DOMPurify3.4.16 for both assets",
+    "screenshots": [
+      {
+        "name": "flowchart",
+        "width": 1280,
+        "height": 900,
+        "sha256": "bfc41962c637577702d12bd53b5a860140df224ba9cea41a8312d09eecbe88bc",
+        "identical": true
+      },
+      {
+        "name": "mobile",
+        "width": 390,
+        "height": 844,
+        "sha256": "8a46b59988025a3599a2e04c510eed686cd571dbcdef26c3a7a9c3b3af2f30aa",
+        "identical": true
+      }
+    ],
+    "optionalWebkit": "No cases executed: cached binary protocol incompatible with Playwright1.63; not a gate"
+  },
+  "limitations": [
+    "Bounded synthetic rendering proof, not the full upstream monorepo suite",
+    "Same-host clean-context reproducibility, not cross-platform reproducibility",
+    "No official upstream attestation for the rebuilt output",
+    "Output integration and package rehearsal remain the OpenClaw lead responsibility"
+  ]
+}
