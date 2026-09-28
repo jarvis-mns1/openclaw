@@ -32,12 +32,9 @@ export function collectMemoryCacheStatus(
         enabled: true,
         entries:
           storage?.embeddingCacheEntries ??
-          (
-            db.prepare(`SELECT COUNT(*) as c FROM ${MEMORY_EMBEDDING_CACHE_TABLE}`).get() as
-              | { c: number }
-              | undefined
-          )?.c ??
-          0,
+          Number(
+            db.prepare(`SELECT COUNT(*) as c FROM ${MEMORY_EMBEDDING_CACHE_TABLE}`).get()?.c ?? 0,
+          ),
         maxEntries: cache.maxEntries,
       }
     : { enabled: false, maxEntries: cache.maxEntries };
