@@ -743,7 +743,7 @@ async function buildResponsesPayload(
     if (
       targetTool &&
       hasCompletedToolOutput &&
-      completedToolName === "tool_search" &&
+      completedToolName === "tool_search_batch" &&
       !toolOutput.includes("FAKE_PLUGIN_OK") &&
       toolSearchOutputHasCandidate(parseToolOutputJson(toolOutput), targetTool) &&
       hasDeclaredTool(body, "tool_call")
@@ -762,9 +762,9 @@ async function buildResponsesPayload(
       !hasCompletedToolOutput &&
       targetTool &&
       !hasDeclaredTool(body, targetTool) &&
-      hasDeclaredTool(body, "tool_search")
+      hasDeclaredTool(body, "tool_search_batch")
     ) {
-      return buildToolCallEventsWithArgs("tool_search", {
+      return buildToolCallEventsWithArgs("tool_search_batch", {
         queries: [
           { query: targetTool, limit: 1 },
           { query: QA_TOOL_SEARCH_SECONDARY_TARGET, limit: 1 },

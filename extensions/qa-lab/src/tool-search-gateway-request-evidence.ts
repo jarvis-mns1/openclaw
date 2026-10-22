@@ -8,7 +8,12 @@ import {
 import { qaMockRequestsAfterUrl } from "./providers/shared/debug-request-cursor.js";
 
 const TOOL_SEARCH_REQUEST_EVIDENCE_LIMIT = 12;
-const SAFE_TOOL_SEARCH_STAGE_NAMES = new Set(["tool_search", "tool_describe", "tool_call"]);
+const SAFE_TOOL_SEARCH_STAGE_NAMES = new Set([
+  "tool_search",
+  "tool_search_batch",
+  "tool_describe",
+  "tool_call",
+]);
 
 function projectToolSearchGatewayLogFacts(logs: string, targetTool: string) {
   const safeTargets = [...SAFE_TOOL_SEARCH_STAGE_NAMES, targetTool].filter(Boolean);
@@ -65,6 +70,7 @@ export async function countToolSearchSessionLogMentions(params: {
     sessionsDir: path.join(params.stateDir, "agents", "qa", "sessions"),
     needles: {
       tool_search: "tool_search",
+      tool_search_batch: "tool_search_batch",
       tool_describe: "tool_describe",
       tool_call: "tool_call",
       [params.targetTool]: params.targetTool,

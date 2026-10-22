@@ -231,7 +231,7 @@ describe("tool search gateway e2e lane result", () => {
         jsonResponse([
           {
             body: { tools: [] },
-            plannedToolName: "tool_search",
+            plannedToolName: "tool_search_batch",
             raw: "{}",
           },
           {
@@ -259,7 +259,7 @@ describe("tool search gateway e2e lane result", () => {
       });
 
       expect(result.providerInputSnippet).toBe(inputPrefix);
-      expect(result.providerPlannedTools).toEqual(["tool_search", "tool_call"]);
+      expect(result.providerPlannedTools).toEqual(["tool_search_batch", "tool_call"]);
       expect(result.providerToolSearchResult).toEqual(JSON.parse(searchOutput));
       expect(result.providerToolOutputSnippet).toBe(
         `${searchOutput}\n${"o".repeat(4_000 - searchOutput.length - 1)}`,
@@ -309,7 +309,7 @@ describe("tool search gateway e2e lane result", () => {
           logs.push(
             "stdout",
             Buffer.from(
-              `${logMode === "rolled" ? "old-log-line\n".repeat(6_000) : ""}OPENAI_API_KEY=${gatewaySecret}\n${promptSecret}\n${toolOutputSecret}\ntool_call\nfake_plugin_tool_17-variant\n`,
+              `${logMode === "rolled" ? "old-log-line\n".repeat(6_000) : ""}OPENAI_API_KEY=${gatewaySecret}\n${promptSecret}\n${toolOutputSecret}\ntool_search_batch\ntool_call\nfake_plugin_tool_17-variant\n`,
             ),
           );
           await fs.mkdir(sessionsDir, { recursive: true });
@@ -318,7 +318,7 @@ describe("tool search gateway e2e lane result", () => {
             `${JSON.stringify({
               message: {
                 role: "assistant",
-                content: "tool_call tool_describe fake_plugin_tool_17-variant",
+                content: "tool_search_batch tool_call tool_describe fake_plugin_tool_17-variant",
               },
             })}\n`,
             "utf8",
@@ -327,6 +327,12 @@ describe("tool search gateway e2e lane result", () => {
         }
         if (url.includes("/debug/requests?after=0")) {
           return jsonResponse([
+            {
+              body: {
+                tools: [{ type: "function", name: "tool_search_batch" }],
+              },
+              plannedToolName: "tool_search_batch",
+            },
             {
               body: {
                 tools: [{ type: "function", name: "tool_call" }],
@@ -360,13 +366,13 @@ describe("tool search gateway e2e lane result", () => {
         const renderedError = scenario.details ?? "";
         expect(renderedError).toContain("Tool Search tools lane gateway request failed (HTTP 502)");
         expect(renderedError).toContain(
-          'providerRequests=[{"plannedToolName":"tool_call","declaredToolCount":1,"targetDeclared":false,"targetResultObserved":true}]',
+          'providerRequests=[{"plannedToolName":"tool_search_batch","declaredToolCount":1,"targetDeclared":false,"targetResultObserved":false},{"plannedToolName":"tool_call","declaredToolCount":1,"targetDeclared":false,"targetResultObserved":true}]',
         );
         expect(renderedError).toContain(
-          'sessionMentions={"tool_search":0,"tool_describe":1,"tool_call":1,"fake_plugin_tool_17":0}',
+          'sessionMentions={"tool_search":0,"tool_search_batch":1,"tool_describe":1,"tool_call":1,"fake_plugin_tool_17":0}',
         );
         expect(renderedError).toContain(
-          `gatewayLogFacts={"captured":${logMode !== "unavailable"},"mentions":{"tool_search":false,"tool_describe":false,"tool_call":${logMode !== "unavailable"},"fake_plugin_tool_17":false}}`,
+          `gatewayLogFacts={"captured":${logMode !== "unavailable"},"mentions":{"tool_search":false,"tool_search_batch":${logMode !== "unavailable"},"tool_describe":false,"tool_call":${logMode !== "unavailable"},"fake_plugin_tool_17":false}}`,
         );
         expect(renderedError).not.toContain(gatewaySecret);
         expect(renderedError).not.toContain(responseSecret);
@@ -419,7 +425,7 @@ describe("tool search gateway e2e lane assertions", () => {
   };
   const normal = {
     gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
-    providerDeclaredToolCount: 36,
+    providerDeclaredToolCount: 46,
     providerDirectoryContainsTarget: false,
     providerPlannedTools: [targetTool],
     providerRawBytes: 12_000,
@@ -445,11 +451,11 @@ describe("tool search gateway e2e lane assertions", () => {
     providerRawBytes: 4_000,
     status: "completed",
     providerToolCallResult,
-    providerDeclaredToolCount: 3,
-    providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
-    providerPlannedTools: ["tool_search", "tool_call"],
+    providerDeclaredToolCount: 4,
+    providerDeclaredToolNames: ["tool_search", "tool_search_batch", "tool_describe", "tool_call"],
+    providerPlannedTools: ["tool_search_batch", "tool_call"],
     providerToolSearchResult: groupedSearchResult,
-    sessionLogToolMentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
+    sessionLogToolMentions: { tool_search_batch: 1, tool_call: 1, [targetTool]: 1 },
   };
 
   it("accepts structured lane proof only when the target plugin tool output is present", () => {
@@ -478,14 +484,14 @@ describe("tool search gateway e2e lane assertions", () => {
     {
       label: "reuses the first query candidate for the second group",
       status: "completed",
-      plannedTools: ["tool_search", "tool_call"],
+      plannedTools: ["tool_search_batch", "tool_call"],
       result: {
         results: [
           { query: targetTool, candidates: [{ name: targetTool }] },
           { query: QA_TOOL_SEARCH_SECONDARY_TARGET, candidates: [{ name: targetTool }] },
         ],
       },
-      mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
+      mentions: { tool_search_batch: 1, tool_call: 1, [targetTool]: 1 },
       error: "did not return both grouped search results",
     },
   ])(
@@ -514,7 +520,7 @@ describe("tool search gateway e2e lane assertions", () => {
         tools: {
           ...tools,
           providerToolCallResult: undefined,
-          sessionLogToolMentions: { tool_search: 1, tool_call: 1, [targetTool]: 2 },
+          sessionLogToolMentions: { tool_search_batch: 1, tool_call: 1, [targetTool]: 2 },
         },
       }),
     ).toThrow(`structured lane did not call ${targetTool}`);

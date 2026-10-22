@@ -277,7 +277,9 @@ function applyLaneConfig(
       ...new Set([
         ...(Array.isArray(tools.alsoAllow) ? tools.alsoAllow : []),
         FAKE_PLUGIN_ID,
-        ...(params.lane !== "normal" ? ["tool_search", "tool_describe", "tool_call"] : []),
+        ...(params.lane !== "normal"
+          ? ["tool_search", "tool_search_batch", "tool_describe", "tool_call"]
+          : []),
       ]),
     ],
     toolSearch: params.lane === "tools" ? { enabled: true, mode: "tools" } : false,
@@ -613,16 +615,22 @@ export function assertToolSearchBatchLaneResult(params: {
       2,
     );
   assert(tools.status === "completed", `structured lane did not complete successfully: ${debug()}`);
-  const structuredControlTools = new Set(["tool_search", "tool_describe", "tool_call"]);
+  const structuredControlTools = new Set([
+    "tool_search",
+    "tool_search_batch",
+    "tool_describe",
+    "tool_call",
+  ]);
   assert(
     [...structuredControlTools].every((name) => tools.providerDeclaredToolNames.includes(name)) &&
       tools.providerDirectoryContainsTarget,
-    `structured lane did not expose its bounded directory with all three control tools: ${debug()}`,
+    `structured lane did not expose its bounded directory with all four control tools: ${debug()}`,
   );
   assert(
-    tools.providerPlannedTools.filter((name) => name === "tool_search").length === 1 &&
+    tools.providerPlannedTools.filter((name) => name === "tool_search_batch").length === 1 &&
+      !tools.providerPlannedTools.includes("tool_search") &&
       tools.providerPlannedTools.filter((name) => name === "tool_call").length === 1 &&
-      tools.providerPlannedTools.indexOf("tool_search") <
+      tools.providerPlannedTools.indexOf("tool_search_batch") <
         tools.providerPlannedTools.indexOf("tool_call"),
     `structured lane did not use one batch search followed by one catalog call: ${debug()}`,
   );
@@ -661,7 +669,7 @@ export function assertToolSearchBatchLaneResult(params: {
     `structured lane did not call ${targetTool}: ${debug()}`,
   );
   assert(
-    (tools.sessionLogToolMentions.tool_search ?? 0) > 0 &&
+    (tools.sessionLogToolMentions.tool_search_batch ?? 0) > 0 &&
       (tools.sessionLogToolMentions.tool_call ?? 0) > 0,
     `structured lane session log did not record search and call mentions: ${debug()}`,
   );

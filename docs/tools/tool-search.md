@@ -28,7 +28,7 @@ This automatic default does not rewrite the configuration file.
 
 When enabled for OpenClaw runs, the model automatically receives a bounded
 directory of the available trusted tool names and descriptions, plus the
-structured `tool_search`, `tool_describe`, and `tool_call` controls. Setting
+structured `tool_search`, `tool_search_batch`, `tool_describe`, and `tool_call` controls. Setting
 `tools.toolSearch: true` or an object without a mode selects this structured
 surface. Direct-only tools remain visible alongside the controls.
 
@@ -82,10 +82,10 @@ policy, approval, hook, logging, and result handling still apply.
 `tools.toolSearch` has two model-facing modes:
 
 - `tools`: the default when `tools.toolSearch` is unset, `true`, or an object
-  without a mode. Exposes `tool_search`,
+  without a mode. Exposes `tool_search`, `tool_search_batch`,
   `tool_describe`, and `tool_call` as plain structured tools, alongside the
   capability directory and direct-only tools.
-- `directory`: exposes `tool_search`, `tool_describe`, and `tool_call` plus a
+- `directory`: exposes `tool_search`, `tool_search_batch`, `tool_describe`, and `tool_call` plus a
   bounded, cache-stable prompt directory. Core coding primitives, direct-only
   tools, and tools required by the run's delivery policy remain visible; other
   schemas stay deferred.
@@ -243,15 +243,9 @@ by name. A compact search signature may be enough to call it; use
 
 ### Batch search
 
-`tool_search` accepts either the single-query shape or a batch of
-independent queries:
-
-```json
-{
-  "query": "today's calendar events",
-  "limit": 3
-}
-```
+`tool_search_batch` accepts one to 16 independent queries. Use `tool_search`
+with `{ "query": "...", "limit": 3 }` for a single search, or call
+`tool_search_batch` with:
 
 ```json
 {
@@ -262,21 +256,17 @@ independent queries:
 }
 ```
 
-Single-query calls continue to return the compact candidate array directly.
-When both shapes contain searches, the non-empty `query` runs first, with the
-top-level `limit` scoped to it. Batch entries follow in request order, including
-repeated query text; each occurrence keeps its own limit and counts toward the
-batch budgets.
+Both controls have closed object schemas: `tool_search` requires `query`, and
+`tool_search_batch` requires `queries`. Batch entries are also closed objects.
+Set limits directly on the scalar request or on each batch entry, never inside
+`options`. Meaningful mixed scalar/batch input is rejected rather than silently
+dropping searches, even when a provider removes schema constraints.
 
-Beside a non-empty batch, an omitted, `null`, empty, or whitespace-only `query`
-is ignored. In that case, omit the top-level `limit` or set it to `null`; a
-non-null top-level limit is rejected rather than applied to the batch.
-An omitted or `null` `queries` retains scalar behavior, and `queries: []` also
-falls back to the scalar shape when `query` is non-empty. A blank scalar query
-without a batch still returns an empty candidate array. A missing or `null`
-scalar with no batch, or an empty batch with no non-empty scalar, is rejected.
-A scalar `limit: null` uses the default limit, just like an omitted limit.
-Invalid query shapes, invalid limits, and over-budget batches still fail.
+Single-query calls return the compact candidate array directly. A blank scalar
+query returns an empty array. Batch queries must be non-blank. Runtime checks
+preserve the one-to-16 bound and validate every entry and shared budget before
+any search runs. Repeated query text stays in request order, with each occurrence
+keeping its own limit and counting toward the batch budgets.
 
 Batch calls return `{ results: [{ query, candidates }] }` in request order. Each
 query uses the same effective catalog, ranking, filtering, and per-query limit
@@ -297,6 +287,7 @@ with no matches returns an empty `candidates` array.
 Directory mode exposes:
 
 - `tool_search`
+- `tool_search_batch`
 - `tool_describe`
 - `tool_call`
 
@@ -457,7 +448,7 @@ The regression proves:
 4. Tool Search exposes compact structured controls plus any direct-only tools.
 5. The Tool Search request payload is smaller for the large fake catalog.
 6. Session logs show the expected tool-call counts.
-7. Structured mode resolves two queries with one `tool_search` call before the
+7. Structured mode resolves two queries with one `tool_search_batch` call before the
    selected plugin tool runs through `tool_call`.
 
 ### Real-model comparison

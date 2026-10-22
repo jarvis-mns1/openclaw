@@ -4,6 +4,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
+import {
+  onSessionIdentityMutation,
+  type SessionIdentityMutationListener,
+} from "./session-lifecycle-events.js";
 
 /** Storage-neutral identity for the session transcript that changed. */
 type SessionTranscriptUpdateTarget = {
@@ -127,8 +131,16 @@ export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): 
 
 export function onInternalSessionTranscriptUpdate(
   listener: InternalSessionTranscriptListener,
+  options?: { onIdentityMutation?: SessionIdentityMutationListener },
 ): () => void {
-  return registerListener(INTERNAL_SESSION_TRANSCRIPT_LISTENERS, listener);
+  const unsubscribeTranscript = registerListener(INTERNAL_SESSION_TRANSCRIPT_LISTENERS, listener);
+  const unsubscribeIdentity = options?.onIdentityMutation
+    ? onSessionIdentityMutation(options.onIdentityMutation)
+    : undefined;
+  return () => {
+    unsubscribeTranscript();
+    unsubscribeIdentity?.();
+  };
 }
 
 /** Advance committed transcript freshness without adding a presentation notification. */
