@@ -420,7 +420,7 @@ describe("memory-core plugin runtime registration", () => {
   });
 
   // Runs before any case below marks process-wide indexing live.
-  it("leaves cold-start indexing demand-driven until a manager has run", async () => {
+  it("starts cold-start watchers in the background without joining database preparation", async () => {
     const config: OpenClawConfig = {
       plugins: { slots: { memory: "memory-core" } },
       agents: { entries: { main: {}, research: {} } },
@@ -448,13 +448,18 @@ describe("memory-core plugin runtime registration", () => {
     }
     const context = { config, stateDir: "unused", logger: api.logger };
     expect(hasMemoryIndexingBeenLive()).toBe(false);
-    await service.start(context);
-    expect(backgroundTasks).toEqual([]);
-    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+    expect(service.start(context)).toBeUndefined();
+    expect(backgroundTasks).toHaveLength(1);
+    await Promise.all(backgroundTasks);
+    expect(getMemorySearchManagerMock.mock.calls).toEqual([
+      [{ cfg: config, agentId: "main" }],
+      [{ cfg: config, agentId: "research" }],
+    ]);
 
-    // A watched manager opened by a search or turn makes later restarts restore it.
+    // The same lifecycle owner restores watching on restart.
     markMemoryIndexingLive();
     await service.stop?.(context);
+    getMemorySearchManagerMock.mockClear();
     await service.start(context);
     await Promise.all(backgroundTasks);
     expect(getMemorySearchManagerMock.mock.calls).toEqual([

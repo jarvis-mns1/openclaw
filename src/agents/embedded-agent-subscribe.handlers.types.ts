@@ -11,6 +11,7 @@ import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { AgentItemEventData } from "../infra/agent-activity-events.js";
+import type { AgentRunContext } from "../infra/agent-run-registry.types.js";
 import type { AssistantMessage, ThinkingContent } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
@@ -253,9 +254,18 @@ export type EmbeddedAgentSubscribeState = {
   lastAssistant?: AssistantMessage;
 };
 
+type ToolEventOrigin = {
+  readonly agentId?: string;
+  readonly sessionKey?: string;
+  readonly lifecycleGeneration: string;
+  readonly isControlUiVisible: boolean;
+  readonly context?: WeakRef<AgentRunContext>;
+};
+
 /** Handler context bundling params, mutable state, emitters, and helper hooks. */
 export type EmbeddedAgentSubscribeContext = {
   params: SubscribeEmbeddedAgentSessionParams;
+  toolEventOrigin?: ToolEventOrigin;
   state: EmbeddedAgentSubscribeState;
   log: EmbeddedSubscribeLogger;
   blockChunking?: BlockReplyChunking;
@@ -346,6 +356,7 @@ export type ToolHandlerContext = Pick<
   | "trimMessagingToolSent"
 > & {
   params: Omit<SubscribeEmbeddedAgentSessionParams, "session">;
+  toolEventOrigin?: ToolEventOrigin;
   state: EmbeddedAgentSubscribeState;
   consumeToolSendReceipt?: (toolCallId: string) => unknown;
 };

@@ -65,7 +65,13 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       workspaceDir: bootstrap?.workspaceDir,
       spawnWorkspaceDir: bootstrap?.workspaceDir,
       requireWorkspaceOnly: true,
-      runtimeToolAllowlist: [...allowed, "tool_search", "tool_describe", "tool_call"],
+      runtimeToolAllowlist: [
+        ...allowed,
+        "tool_search",
+        "tool_search_batch",
+        "tool_describe",
+        "tool_call",
+      ],
       toolConstructionPlan: {
         includeBaseCodingTools: true,
         includeShellTools: true,
@@ -76,7 +82,7 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     });
     expect(
       hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0]?.customTools?.map((tool) => tool.name),
-    ).toEqual(["tool_search", "tool_describe", "tool_call", ...allowed]);
+    ).toEqual(["tool_search", "tool_describe", "tool_call", "tool_search_batch", ...allowed]);
     expect(hoisted.defaultResourceLoaderInitMock.mock.calls[0]?.[0]).toMatchObject({
       cwd: taskRepo,
     });

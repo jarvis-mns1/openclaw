@@ -1133,6 +1133,16 @@ type OverrideViolation = {
 // reviewed npm tarball exact here until no supported frozen target can reference it.
 const NPM_BUNDLED_DEPENDENCY_POLICIES = new Map([
   [
+    "12.2.1",
+    {
+      allowMissingBundleMarker: false,
+      exceptions: new Map([
+        ["node_modules/npm/node_modules/minimatch", "10.2.5"],
+        ["node_modules/npm/node_modules/ip-address", "10.7.2"],
+      ]),
+    },
+  ],
+  [
     "11.20.0",
     {
       allowMissingBundleMarker: true,

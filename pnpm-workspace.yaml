@@ -10,6 +10,11 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
+  # Owner-approved staging security fixes; expire after October 23, 2026 UTC.
+  - "markdown-it@15.0.3"
+  - "npm@12.2.1"
+  # Owner-approved markdown-it transitive dependency; expires 2026-10-22T21:58:50.520Z.
+  - "argparse@3.0.3"
   - "@openai/codex"
   - "@openai/codex-*"
   # Reviewed fs-safe 0.25.0 release and native helpers; remove after 2026-10-15T21:23:59.079Z.
