@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { buildToolSearchRunPlan } from "./attempt-tool-search-run-plan.js";
 
@@ -34,6 +35,30 @@ function plan(overrides: Partial<Parameters<typeof buildToolSearchRunPlan>[0]> =
 }
 
 describe("buildToolSearchRunPlan", () => {
+  it.each([false, true])(
+    "keeps batch search replayable without masking an empty allowlist (directory: %s)",
+    (directory) => {
+      const controls = [...TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES];
+      const overrides = {
+        visibleTools: controls.map(tool),
+        clientTools: [],
+        deferredToolsCallable: directory,
+        ...(directory ? { controlNames: controls } : {}),
+      };
+      const result = plan(overrides);
+      expect(result.visibleAllowedToolNames.has("tool_search_batch")).toBe(true);
+      expect(result.liveAllowedToolNames.has("tool_search_batch")).toBe(true);
+      expect(result.replayAllowedToolNames.has("tool_search_batch")).toBe(true);
+      expect(result.hasCallableTools).toBe(false);
+      expect(
+        plan({
+          ...overrides,
+          explicitAllowlistSources: [{ entries: ["tool_search_batch"] }],
+        }).hasCallableTools,
+      ).toBe(true);
+    },
+  );
+
   it("carries native catalog capabilities without widening direct execution authority", () => {
     const foreignTool = tool("sessions_yield");
     setPluginToolMeta(foreignTool, { pluginId: "bundle-mcp", optional: false });

@@ -102,7 +102,7 @@ export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGate
         codeMode
           ? ["exec", "wait"]
           : mode === "directory"
-            ? ["tool_search", "tool_describe", "tool_call", "read"]
+            ? ["tool_search", "tool_describe", "tool_call", "tool_search_batch", "read"]
             : ["read", "web_fetch"],
       );
       expect(gateway.gatewayToolRequests).toEqual([

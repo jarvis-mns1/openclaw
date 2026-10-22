@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
+  type onInternalSessionTranscriptUpdate,
   resolveStateDir,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
@@ -49,10 +50,20 @@ type MemorySessionTranscriptUpdate = {
 };
 
 let transcriptUpdateListener: ((update: MemorySessionTranscriptUpdate) => void) | undefined;
+type MemorySessionIdentityListener = NonNullable<
+  NonNullable<Parameters<typeof onInternalSessionTranscriptUpdate>[1]>["onIdentityMutation"]
+>;
+let identityMutationListener: MemorySessionIdentityListener | undefined;
 
 /** Clears the module-owned listener between tests; ESM bindings cannot be reassigned by importers. */
 export function resetTranscriptUpdateListener(): void {
   transcriptUpdateListener = undefined;
+  identityMutationListener = undefined;
+}
+export function emitSessionIdentityMutationForTest(
+  mutation: Parameters<MemorySessionIdentityListener>[0],
+): void {
+  identityMutationListener?.(mutation);
 }
 export const startupHarnessDatabases = new Set<MemoryIndexDatabase>();
 
@@ -281,14 +292,19 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
 
   protected override subscribeSessionTranscriptUpdates(
     listener: (update: MemorySessionTranscriptUpdate) => void,
+    identityListener: MemorySessionIdentityListener,
   ): () => void {
     if (this.subscribeToRealEvents) {
-      return super.subscribeSessionTranscriptUpdates(listener);
+      return super.subscribeSessionTranscriptUpdates(listener, identityListener);
     }
     transcriptUpdateListener = listener;
+    identityMutationListener = identityListener;
     return () => {
       if (transcriptUpdateListener === listener) {
         transcriptUpdateListener = undefined;
+      }
+      if (identityMutationListener === identityListener) {
+        identityMutationListener = undefined;
       }
     };
   }

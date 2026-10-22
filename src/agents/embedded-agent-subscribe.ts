@@ -5,6 +5,9 @@ import { createInlineCodeState } from "../../packages/markdown-core/src/code-spa
  */
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { createAbortError } from "../infra/abort-signal.js";
+import { getAgentEventExecutionContext } from "../infra/agent-event-execution-context.js";
+import { captureAgentRunLifecycleGeneration } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
@@ -72,6 +75,23 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     };
   }
   const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
+  // Queued tool callbacks can outlive their registration or run outside its async scope.
+  const originContext = getAgentRunContext(params.runId);
+  const routingOwner = getAgentEventExecutionContext()
+    .getStore()
+    ?.routingByRun?.get(params.runId)?.owner;
+  const toolEventOrigin = {
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    lifecycleGeneration:
+      params.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(params.runId),
+    isControlUiVisible: originContext?.isControlUiVisible ?? true,
+    context: originContext
+      ? routingOwner?.deref() === originContext
+        ? routingOwner
+        : new WeakRef(originContext)
+      : undefined,
+  };
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
   const state: EmbeddedAgentSubscribeState = createEmbeddedAgentSubscribeState(params);
@@ -358,6 +378,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
   const ctx: EmbeddedAgentSubscribeContext = {
     ...streamRendering,
     params,
+    toolEventOrigin,
     state,
     log,
     blockChunking,

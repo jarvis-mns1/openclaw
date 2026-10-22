@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SessionStartupCatchupHarness,
   emitSessionTranscriptUpdate,
+  emitSessionIdentityMutationForTest,
   startupHarnessDatabases,
   resetTranscriptUpdateListener,
 } from "./manager-sync-ops.startup-catchup.test-support.js";
@@ -733,6 +734,38 @@ describe("session startup catch-up", () => {
       timerObserver.mockRestore();
     }
   });
+
+  it.each([
+    { sessionKey: "global", agentId: "main", kind: "replace", reconcile: true },
+    { sessionKey: "global", agentId: "other", kind: "replace", reconcile: false },
+    { sessionKey: "agent:main:chat:thread", agentId: "other", kind: "replace", reconcile: true },
+    { sessionKey: "agent:other:chat:thread", agentId: "main", kind: "replace", reconcile: false },
+    { sessionKey: "agent:main:chat:thread", agentId: "main", kind: "create", reconcile: false },
+  ] as const)(
+    "scopes $kind for $sessionKey to its canonical owner (operation=$agentId)",
+    async ({ sessionKey, agentId, kind, reconcile }) => {
+      vi.useFakeTimers();
+      const harness = new SessionStartupCatchupHarness([]);
+      harness.startTranscriptListener();
+      try {
+        emitSessionIdentityMutationForTest({
+          databaseIdentity: Symbol("synthetic-session-store"),
+          agentId,
+          kind,
+          previous: { sessionKeys: [sessionKey] },
+          current: { sessionKeys: [sessionKey] },
+        });
+        await vi.advanceTimersByTimeAsync(5000);
+        await harness.waitForSessionSync();
+        expect(harness.syncCalls).toEqual(reconcile ? [{ reason: "session-reconcile" }] : []);
+        if (!reconcile) {
+          expect(harness.corpusListCalls).toBe(0);
+        }
+      } finally {
+        harness.stopTranscriptListener();
+      }
+    },
+  );
 
   it("indexes a real SQLite delete archive through the transcript listener", async () => {
     vi.useFakeTimers();

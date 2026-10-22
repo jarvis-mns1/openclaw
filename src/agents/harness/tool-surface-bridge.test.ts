@@ -14,6 +14,7 @@ import {
   createToolSearchTools,
   buildToolSchemaDirectoryPrompt,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_BATCH_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "../tool-search.js";
 import { prepareAgentToolSurfacePresentation } from "../tool-surface-plan.js";
@@ -71,7 +72,13 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       codeMode: false,
       preferred: false,
       search: true,
-      expected: ["tool_search", "tool_describe", "tool_call", "fixture_direct"],
+      expected: [
+        "tool_search",
+        "tool_describe",
+        "tool_call",
+        "tool_search_batch",
+        "fixture_direct",
+      ],
     },
   ] as const)(
     "preserves the local $mode projection after transporting prepared facts",
@@ -164,6 +171,12 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           }),
           ...tools(["fixture_allowed", "fixture_denied"]),
         ]);
+        expect(surface.tools.some((tool) => tool.name === TOOL_SEARCH_BATCH_TOOL_NAME)).toBe(true);
+        expect(
+          expectDefined(runtime.toolSearchCatalogRef, "Tool Search catalog").current?.entries.map(
+            (entry) => entry.name,
+          ),
+        ).not.toContain(TOOL_SEARCH_BATCH_TOOL_NAME);
         const full = surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
         expect(full).toContain("fixture_denied");
         expect(surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt).toBe(full);
@@ -251,6 +264,9 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
         expect(callableNames).not.toContain("memory_search");
         expect(runtime.codeModeControlsEnabled).toBe(mode === "code");
         expect(runtime.toolSearchControlsEnabled).toBe(mode === "search");
+        expect(allowedTools.some((tool) => tool.name === TOOL_SEARCH_BATCH_TOOL_NAME)).toBe(
+          mode === "search",
+        );
       } finally {
         runtime.cleanup();
       }
@@ -301,6 +317,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           "tool_search",
           "tool_describe",
           "tool_call",
+          "tool_search_batch",
           "read",
           ...(directMessage ? ["message"] : []),
         ]);
@@ -453,6 +470,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
         .compactTools(
           tools([
             TOOL_SEARCH_RAW_TOOL_NAME,
+            TOOL_SEARCH_BATCH_TOOL_NAME,
             TOOL_DESCRIBE_RAW_TOOL_NAME,
             TOOL_CALL_RAW_TOOL_NAME,
             "exec",
@@ -462,6 +480,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
         .tools.map((tool) => tool.name),
     ).toEqual([
       TOOL_SEARCH_RAW_TOOL_NAME,
+      TOOL_SEARCH_BATCH_TOOL_NAME,
       TOOL_DESCRIBE_RAW_TOOL_NAME,
       TOOL_CALL_RAW_TOOL_NAME,
       "exec",
@@ -476,6 +495,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     };
     const availableTools = tools([
       TOOL_SEARCH_RAW_TOOL_NAME,
+      TOOL_SEARCH_BATCH_TOOL_NAME,
       TOOL_DESCRIBE_RAW_TOOL_NAME,
       TOOL_CALL_RAW_TOOL_NAME,
       "read",
@@ -496,6 +516,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     try {
       const expected = [
         TOOL_SEARCH_RAW_TOOL_NAME,
+        TOOL_SEARCH_BATCH_TOOL_NAME,
         TOOL_DESCRIBE_RAW_TOOL_NAME,
         TOOL_CALL_RAW_TOOL_NAME,
         "read",
@@ -522,6 +543,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           .compactTools(
             tools([
               TOOL_SEARCH_RAW_TOOL_NAME,
+              TOOL_SEARCH_BATCH_TOOL_NAME,
               TOOL_DESCRIBE_RAW_TOOL_NAME,
               TOOL_CALL_RAW_TOOL_NAME,
               "web_search",
@@ -531,6 +553,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           .tools.map((tool) => tool.name),
       ).toEqual([
         TOOL_SEARCH_RAW_TOOL_NAME,
+        TOOL_SEARCH_BATCH_TOOL_NAME,
         TOOL_DESCRIBE_RAW_TOOL_NAME,
         TOOL_CALL_RAW_TOOL_NAME,
         "message",
@@ -624,6 +647,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           .compactTools(
             tools([
               TOOL_SEARCH_RAW_TOOL_NAME,
+              TOOL_SEARCH_BATCH_TOOL_NAME,
               TOOL_DESCRIBE_RAW_TOOL_NAME,
               TOOL_CALL_RAW_TOOL_NAME,
               "web_search",
@@ -633,6 +657,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           .tools.map((tool) => tool.name),
       ).toEqual([
         TOOL_SEARCH_RAW_TOOL_NAME,
+        TOOL_SEARCH_BATCH_TOOL_NAME,
         TOOL_DESCRIBE_RAW_TOOL_NAME,
         TOOL_CALL_RAW_TOOL_NAME,
         "message",
