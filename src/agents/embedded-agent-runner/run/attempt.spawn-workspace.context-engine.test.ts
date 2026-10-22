@@ -392,7 +392,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const sessionOptions = mockParams(hoisted.createAgentSessionMock);
     const customTools = requireRecords(sessionOptions.customTools, "customTools");
     expect(customTools.map((tool) => tool.name)).toEqual(
-      privateReply ? ["message"] : ["tool_search", "tool_describe", "tool_call", "message"],
+      privateReply
+        ? ["message"]
+        : ["tool_search", "tool_describe", "tool_call", "tool_search_batch", "message"],
     );
   });
 
@@ -630,7 +632,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("includes hook-adjusted bootstrap files preloaded before routing", async () => {
-    const workspaceDir = "/tmp/openclaw-hook-workspace";
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-workspace-"));
+    tempPaths.push(workspaceDir);
     hoisted.resolveBootstrapFilesForRunMock.mockResolvedValueOnce([
       {
         name: "BOOTSTRAP.md",

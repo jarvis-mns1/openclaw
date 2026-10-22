@@ -75,6 +75,17 @@ function indexOf(description: string) {
 }
 
 describe("Code Mode catalog and model-visible surface", () => {
+  it("removes every structured Tool Search control from Code Mode", () => {
+    const { tools, catalogToolCount } = catalog([
+      ...["tool_search", "tool_search_batch", "tool_describe", "tool_call"].map((name) =>
+        fakeTool(name, "Structured control"),
+      ),
+      pluginTool("fake_create_ticket", "Create a ticket"),
+    ]);
+    expect(tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+    expect(catalogToolCount).toBe(1);
+  });
+
   it("removes shell-computation guidance when a client shadows the shell tool", () => {
     const { ctx, exec } = catalog([fakeTool("exec", "Run shell command")]);
     expect(exec.description).toContain("Use the shell tool `exec` for heavier computation");

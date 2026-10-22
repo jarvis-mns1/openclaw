@@ -285,8 +285,10 @@ describe("Gateway index over Harness workspace files", () => {
         resume.resolve();
       }
       const settled = await Promise.allSettled(sync.mock.results.map((result) => result.value));
-      expect(manager.status().dirty).toBe(true);
-      expect(run).toHaveBeenCalledTimes(outcome === "newer-index" ? 2 : 1);
+      // New notifications get one follow-up even after discovery fails; a newer
+      // index remains protected while the recovered discovery can converge.
+      expect(manager.status().dirty).toBe(outcome === "newer-index");
+      expect(run).toHaveBeenCalledTimes(2);
       expect(
         settled.every(
           (result) => result.status === (outcome === "newer-index" ? "fulfilled" : "rejected"),

@@ -368,34 +368,35 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     },
   ): Promise<void> {
     if (this.syncing) {
-      if (hasTargetedSessionSyncParams(params)) {
-        if (options?.queuedSessionOwner) {
-          // Another caller claimed the sync slot after this queue owner was
-          // created. Wait for it, then retry admission instead of enqueueing
-          // into the promise that is already awaiting this call.
-          await this.syncing.catch(() => undefined);
-          if (this.closing || this.closed) {
-            return;
-          }
-          return await this.syncAdmitted(params, options);
+      if (options?.queuedSessionOwner || params?.reason === "session-reconcile") {
+        // A queued session pass may take the slot while another owner awaits it.
+        // That pass cannot satisfy this owner's accepted work.
+        await this.syncing.catch(() => undefined);
+        if (this.closing || this.closed) {
+          return;
         }
+        return await this.syncAdmitted(params, options);
+      }
+      if (hasTargetedSessionSyncParams(params)) {
         return this.sessionSyncQueue.enqueue(params);
       }
+      // Capture the joined generation before another owner can replace the slot.
+      const joinedWatchGeneration = this.syncingMemoryWatchGeneration;
+      const needsWatchFollowUp = () =>
+        params?.reason === "watch" &&
+        this.dirty &&
+        !this.closing &&
+        !this.closed &&
+        this.memoryWatchGeneration > joinedWatchGeneration;
       try {
         await this.syncing;
-        // Watch events accepted after source planning belong to the next pass.
-        // Joining the old promise alone would strand them until another search.
-        if (
-          params?.reason === "watch" &&
-          this.dirty &&
-          !this.closing &&
-          !this.closed &&
-          this.memoryWatchGeneration > this.syncingMemoryWatchGeneration
-        ) {
-          return await this.syncAdmitted(params, options);
-        }
-        return;
       } catch (err) {
+        if (needsWatchFollowUp()) {
+          // Drain newly notified work after failure, retaining the original
+          // rejection for callers that joined the failed generation.
+          await this.syncAdmitted(params, options);
+          throw err;
+        }
         if (
           options?.allowEmbeddingBootstrapFallback &&
           this.providerRequirement.mode === "optional" &&
@@ -408,10 +409,17 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         }
         throw err;
       }
+      if (needsWatchFollowUp()) {
+        return await this.syncAdmitted(params, options);
+      }
+      return;
     }
     // An intentional no-progress pass may remain dirty. Only newly accepted
     // watch facts can admit another pass; joined callers cannot spin on dirty.
-    this.syncingMemoryWatchGeneration = this.memoryWatchGeneration;
+    if (!hasTargetedSessionSyncParams(params)) {
+      // A session-only pass cannot consume the pending memory watch generation.
+      this.syncingMemoryWatchGeneration = this.memoryWatchGeneration;
+    }
     const run = () =>
       this.publishedDatabase.withPublicationGeneration(async () => {
         const hadBootstrapFailure = this.embeddingBootstrapFailure !== undefined;
