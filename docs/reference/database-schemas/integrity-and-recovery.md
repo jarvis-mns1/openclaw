@@ -618,6 +618,12 @@ preparation leaves the agent degraded with the recorded reason; it does not stop
 healthy agents. Shared-state database failures retain their existing startup
 checks.
 
+Credential publication and the explicit model refresh carry the admitting
+Gateway's current plugin registry. Model rebuilds triggered by auth snapshot
+listeners can therefore borrow unchanged plugin instances from that Gateway;
+they do not select a process-active sibling registry. Existing plugin input and
+lifetime checks still decide whether reuse is valid.
+
 Pending preparation does not produce a startup migration warning. Status and
 Doctor derive failed inspection and preparation warnings from current agent
 admission decisions, with the reason and repair guidance. Successful preparation

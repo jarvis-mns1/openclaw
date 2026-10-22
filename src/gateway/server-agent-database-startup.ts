@@ -162,22 +162,25 @@ export function activateGatewayAgentDatabaseStartup(params: {
         assertAgentDatabaseConfiguration(beforeConfig, agentId, paths, env);
         if (
           !previousSecrets ||
-          !(await refreshActiveSecretsRuntimeSnapshotForConfig({
-            sourceConfig: previousSecrets.sourceConfig,
-            runtimeSourceConfig: getRuntimeConfigSourceSnapshot() ?? undefined,
-            includeAuthStoreRefs: true,
-            assertCurrent: () => {
-              signal.throwIfAborted();
-              assertCurrent();
-              if (
-                !params.isCurrent() ||
-                params.getConfig() !== beforeConfig ||
-                getActiveSecretsRuntimeSnapshotRevision() !== previousSecretsRevision
-              ) {
-                throw new Error(`Agent ${agentId} secrets preparation was superseded`);
-              }
-            },
-          }))
+          // Auth snapshot publication can enqueue model builds before the explicit refresh below.
+          !(await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
+            refreshActiveSecretsRuntimeSnapshotForConfig({
+              sourceConfig: previousSecrets.sourceConfig,
+              runtimeSourceConfig: getRuntimeConfigSourceSnapshot() ?? undefined,
+              includeAuthStoreRefs: true,
+              assertCurrent: () => {
+                signal.throwIfAborted();
+                assertCurrent();
+                if (
+                  !params.isCurrent() ||
+                  params.getConfig() !== beforeConfig ||
+                  getActiveSecretsRuntimeSnapshotRevision() !== previousSecretsRevision
+                ) {
+                  throw new Error(`Agent ${agentId} secrets preparation was superseded`);
+                }
+              },
+            }),
+          ))
         ) {
           throw new Error(`Agent ${agentId} secrets preparation could not publish`);
         }
