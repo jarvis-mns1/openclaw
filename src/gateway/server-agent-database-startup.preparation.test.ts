@@ -4,6 +4,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   readAgentDatabaseAdmissionRefusal,
@@ -97,6 +102,7 @@ function createFleet(
     fs.writeFileSync(pathname, "synthetic file identity; native admission is mocked");
   }
   let revision = 0;
+  let pluginRegistry = createEmptyPluginRegistry();
   const opened = createDeferredCore();
   let openCount = 0;
   mocks.opened.mockImplementation(() => {
@@ -134,6 +140,9 @@ function createFleet(
     inspections[index]!.resolve({ incompatible: [], indeterminate: [] });
   return {
     env,
+    setPluginRegistry: (registry: typeof pluginRegistry) => {
+      pluginRegistry = registry;
+    },
     opened: opened.promise,
     hold,
     inspect,
@@ -178,7 +187,7 @@ function createFleet(
           admission,
           preparationReady,
           getConfig: () => cfg,
-          getPluginRegistry: vi.fn(),
+          getPluginRegistry: () => pluginRegistry,
           getPluginMetadataSnapshot: () => undefined,
           isCurrent: () => true,
           log: { info: vi.fn(), warn: vi.fn() },
@@ -196,6 +205,43 @@ function createFleet(
 
 const recoveredMessage = "agent database recovered after background inspection and preparation";
 const progressMessage = "agent database startup preparation still running";
+
+it("carries the current Gateway registry into secrets-triggered model publication", async () => {
+  const fleet = createFleet(["worker"]);
+  const currentRegistry = createEmptyPluginRegistry();
+  const siblingRegistry = createEmptyPluginRegistry();
+  const refreshSecrets = mocks.refreshSecrets.getMockImplementation()!;
+  const observed = vi.fn();
+  const listenerGate = fleet.hold();
+  let listenerBuild: Promise<void> | undefined;
+  mocks.refreshSecrets.mockImplementation(async (...args) => {
+    await Promise.resolve();
+    const result = await refreshSecrets(...args);
+    // Auth snapshot listeners enqueue model builds in the secrets publisher's async context.
+    listenerBuild = listenerGate.promise.then(() => {
+      observed(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+    });
+    return result;
+  });
+  mocks.refreshModels.mockImplementation(async () => {
+    observed(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+  });
+  await withPluginRuntimeRegistryScope(siblingRegistry, () =>
+    fleet.run(async () => {
+      fleet.setPluginRegistry(currentRegistry);
+      fleet.inspect(0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(readAgentDatabaseAdmissionRefusal("worker", fleet)).toBeUndefined();
+      expect(observed).toHaveBeenCalledTimes(1);
+      expect(listenerBuild).toBeDefined();
+      listenerGate.resolve();
+      await listenerBuild;
+      expect(observed).toHaveBeenCalledTimes(2);
+      expect(observed.mock.calls[0]![0]).toBe(currentRegistry);
+      expect(observed.mock.calls[1]![0]).toBe(currentRegistry);
+    }),
+  );
+});
 
 it("admits a small deferred agent while an earlier agent's session migration is blocked", async ({
   signal,
