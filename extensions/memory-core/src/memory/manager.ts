@@ -20,7 +20,7 @@ import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { withOpenClawAgentDatabaseWrite } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import type { EmbeddingProvider } from "./embeddings.js";
-import { getMemoryManagerLifecycle, markMemoryIndexingLive } from "./lifecycle.js";
+import { getMemoryManagerLifecycle } from "./lifecycle.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
@@ -303,7 +303,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       }
       this.batch = this.resolveBatchConfig();
       if (!transient) {
-        markMemoryIndexingLive();
         this.runInBackgroundContext(() => {
           this.ensureWatcher();
           this.ensureSessionListener();

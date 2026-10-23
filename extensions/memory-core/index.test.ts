@@ -15,11 +15,7 @@ import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { buildMemoryPromptSection } from "./src/memory-tool-contract.js";
-import {
-  getMemoryManagerLifecycle,
-  hasMemoryIndexingBeenLive,
-  markMemoryIndexingLive,
-} from "./src/memory/lifecycle.js";
+import { getMemoryManagerLifecycle } from "./src/memory/lifecycle.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 
 const closeAllMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -419,7 +415,6 @@ describe("memory-core plugin runtime registration", () => {
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
   });
 
-  // Runs before any case below marks process-wide indexing live.
   it("starts cold-start watchers in the background without joining database preparation", async () => {
     const config: OpenClawConfig = {
       plugins: { slots: { memory: "memory-core" } },
@@ -447,7 +442,6 @@ describe("memory-core plugin runtime registration", () => {
       throw new Error("Expected the memory index service");
     }
     const context = { config, stateDir: "unused", logger: api.logger };
-    expect(hasMemoryIndexingBeenLive()).toBe(false);
     expect(service.start(context)).toBeUndefined();
     expect(backgroundTasks).toHaveLength(1);
     await Promise.all(backgroundTasks);
@@ -457,7 +451,6 @@ describe("memory-core plugin runtime registration", () => {
     ]);
 
     // The same lifecycle owner restores watching on restart.
-    markMemoryIndexingLive();
     await service.stop?.(context);
     getMemorySearchManagerMock.mockClear();
     await service.start(context);
@@ -471,7 +464,6 @@ describe("memory-core plugin runtime registration", () => {
   it.each(["memory-core", "honcho", "none"])(
     "starts configured indexes only for the selected memory slot: %s",
     async (owner) => {
-      markMemoryIndexingLive();
       const config: OpenClawConfig = {
         plugins: { slots: { memory: owner } },
         agents: { entries: { main: {}, research: {} } },
@@ -517,7 +509,6 @@ describe("memory-core plugin runtime registration", () => {
   ])(
     "drains managers after tracked activation rejects ($cleanupOwner, cleanup failure: $cleanupFails)",
     async ({ cleanupOwner, cleanupFails }) => {
-      markMemoryIndexingLive();
       const activationFailure = new Error("plugin retired after activation");
       const cleanupFailure = new Error("memory manager cleanup failed");
       const config: OpenClawConfig = {
