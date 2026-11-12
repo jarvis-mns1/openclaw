@@ -231,7 +231,7 @@ describe("tool search gateway e2e lane result", () => {
         jsonResponse([
           {
             body: { tools: [] },
-            plannedToolName: "tool_search",
+            plannedToolName: "tool_search_batch",
             raw: "{}",
           },
           {
@@ -259,7 +259,7 @@ describe("tool search gateway e2e lane result", () => {
       });
 
       expect(result.providerInputSnippet).toBe(inputPrefix);
-      expect(result.providerPlannedTools).toEqual(["tool_search", "dispatch_action"]);
+      expect(result.providerPlannedTools).toEqual(["tool_search_batch", "dispatch_action"]);
       expect(result.providerToolSearchResult).toEqual(JSON.parse(searchOutput));
       expect(result.providerToolOutputSnippet).toBe(
         `${searchOutput}\n${"o".repeat(4_000 - searchOutput.length - 1)}`,
@@ -309,7 +309,7 @@ describe("tool search gateway e2e lane result", () => {
           logs.push(
             "stdout",
             Buffer.from(
-              `${logMode === "rolled" ? "old-log-line\n".repeat(6_000) : ""}OPENAI_API_KEY=${gatewaySecret}\n${promptSecret}\n${toolOutputSecret}\ndispatch_action\nfake_plugin_tool_17-variant\n`,
+              `${logMode === "rolled" ? "old-log-line\n".repeat(6_000) : ""}OPENAI_API_KEY=${gatewaySecret}\n${promptSecret}\n${toolOutputSecret}\ntool_search_batch\ndispatch_action\nfake_plugin_tool_17-variant\n`,
             ),
           );
           await fs.mkdir(sessionsDir, { recursive: true });
@@ -318,7 +318,8 @@ describe("tool search gateway e2e lane result", () => {
             `${JSON.stringify({
               message: {
                 role: "assistant",
-                content: "dispatch_action tool_describe fake_plugin_tool_17-variant",
+                content:
+                  "tool_search_batch dispatch_action tool_describe fake_plugin_tool_17-variant",
               },
             })}\n`,
             "utf8",
@@ -327,6 +328,10 @@ describe("tool search gateway e2e lane result", () => {
         }
         if (url.includes("/debug/requests?after=0")) {
           return jsonResponse([
+            {
+              body: { tools: [{ type: "function", name: "tool_search_batch" }] },
+              plannedToolName: "tool_search_batch",
+            },
             {
               body: {
                 tools: [{ type: "function", name: "dispatch_action" }],
@@ -360,13 +365,13 @@ describe("tool search gateway e2e lane result", () => {
         const renderedError = scenario.details ?? "";
         expect(renderedError).toContain("Tool Search tools lane gateway request failed (HTTP 502)");
         expect(renderedError).toContain(
-          'providerRequests=[{"plannedToolName":"dispatch_action","declaredToolCount":1,"targetDeclared":false,"targetResultObserved":true}]',
+          'providerRequests=[{"plannedToolName":"tool_search_batch","declaredToolCount":1,"targetDeclared":false,"targetResultObserved":false},{"plannedToolName":"dispatch_action","declaredToolCount":1,"targetDeclared":false,"targetResultObserved":true}]',
         );
         expect(renderedError).toContain(
-          'sessionMentions={"tool_search":0,"tool_describe":1,"dispatch_action":1,"fake_plugin_tool_17":0}',
+          'sessionMentions={"tool_search":0,"tool_search_batch":1,"tool_describe":1,"dispatch_action":1,"fake_plugin_tool_17":0}',
         );
         expect(renderedError).toContain(
-          `gatewayLogFacts={"captured":${logMode !== "unavailable"},"mentions":{"tool_search":false,"tool_describe":false,"dispatch_action":${logMode !== "unavailable"},"fake_plugin_tool_17":false}}`,
+          `gatewayLogFacts={"captured":${logMode !== "unavailable"},"mentions":{"tool_search":false,"tool_search_batch":${logMode !== "unavailable"},"tool_describe":false,"dispatch_action":${logMode !== "unavailable"},"fake_plugin_tool_17":false}}`,
         );
         expect(renderedError).not.toContain(gatewaySecret);
         expect(renderedError).not.toContain(responseSecret);
@@ -415,7 +420,9 @@ describe("tool search gateway e2e lane assertions", () => {
   };
   const providerToolCallResult = {
     tool: { name: targetTool },
-    result: { details: { status: "ok", tool: targetTool } },
+    result: {
+      content: [{ type: "text", text: `FAKE_PLUGIN_OK ${targetTool} {"marker":"tools"}` }],
+    },
   };
   const normal = {
     gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
@@ -445,11 +452,16 @@ describe("tool search gateway e2e lane assertions", () => {
     providerRawBytes: 4_000,
     status: "completed",
     providerToolCallResult,
-    providerDeclaredToolCount: 3,
-    providerDeclaredToolNames: ["tool_search", "tool_describe", "dispatch_action"],
-    providerPlannedTools: ["tool_search", "dispatch_action"],
+    providerDeclaredToolCount: 4,
+    providerDeclaredToolNames: [
+      "tool_search",
+      "tool_search_batch",
+      "tool_describe",
+      "dispatch_action",
+    ],
+    providerPlannedTools: ["tool_search_batch", "dispatch_action"],
     providerToolSearchResult: groupedSearchResult,
-    sessionLogToolMentions: { tool_search: 1, dispatch_action: 1, [targetTool]: 1 },
+    sessionLogToolMentions: { tool_search_batch: 1, dispatch_action: 1, [targetTool]: 1 },
   };
 
   it("accepts structured lane proof only when the target plugin tool output is present", () => {
@@ -478,14 +490,14 @@ describe("tool search gateway e2e lane assertions", () => {
     {
       label: "reuses the first query candidate for the second group",
       status: "completed",
-      plannedTools: ["tool_search", "dispatch_action"],
+      plannedTools: ["tool_search_batch", "dispatch_action"],
       result: {
         results: [
           { query: targetTool, candidates: [{ name: targetTool }] },
           { query: QA_TOOL_SEARCH_SECONDARY_TARGET, candidates: [{ name: targetTool }] },
         ],
       },
-      mentions: { tool_search: 1, dispatch_action: 1, [targetTool]: 1 },
+      mentions: { tool_search_batch: 1, dispatch_action: 1, [targetTool]: 1 },
       error: "did not return both grouped search results",
     },
   ])(
@@ -514,10 +526,32 @@ describe("tool search gateway e2e lane assertions", () => {
         tools: {
           ...tools,
           providerToolCallResult: undefined,
-          sessionLogToolMentions: { tool_search: 1, dispatch_action: 1, [targetTool]: 2 },
+          sessionLogToolMentions: { tool_search_batch: 1, dispatch_action: 1, [targetTool]: 2 },
         },
       }),
     ).toThrow(`structured lane did not call ${targetTool}`);
+  });
+
+  it.each([
+    { ...providerToolCallResult.result, isError: true },
+    { content: [{ type: "text", text: `FAKE_PLUGIN_OK ${targetTool}-other {}` }] },
+    { details: { status: "ok", tool: targetTool } },
+  ])("rejects failed or unobserved model-visible target output: %j", (result) => {
+    expect(() =>
+      assertToolSearchBatchLaneResult({
+        targetTool,
+        tools: { ...tools, providerToolCallResult: { ...providerToolCallResult, result } },
+      }),
+    ).toThrow(`structured lane did not call ${targetTool}`);
+  });
+
+  it("rejects evidence from the retired overloaded search shape", () => {
+    expect(() =>
+      assertToolSearchBatchLaneResult({
+        targetTool,
+        tools: { ...tools, providerPlannedTools: ["tool_search", "dispatch_action"] },
+      }),
+    ).toThrow("did not use one batch search");
   });
 
   it("preserves surrogate pairs in both lane debug output snippets", () => {

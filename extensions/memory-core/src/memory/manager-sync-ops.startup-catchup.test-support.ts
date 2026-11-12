@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   resolveStateDir,
+  type onInternalSessionTranscriptUpdate,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -268,9 +269,10 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
 
   protected override subscribeSessionTranscriptUpdates(
     listener: (update: MemorySessionTranscriptUpdate) => void,
+    options?: Parameters<typeof onInternalSessionTranscriptUpdate>[1],
   ): () => void {
     if (this.subscribeToRealEvents) {
-      return super.subscribeSessionTranscriptUpdates(listener);
+      return super.subscribeSessionTranscriptUpdates(listener, options);
     }
     transcriptUpdateListener = listener;
     return () => {

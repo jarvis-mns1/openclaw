@@ -44,6 +44,7 @@ import {
   resolveToolSearchCatalogTool,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_BATCH_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
 } from "./tool-search.js";
@@ -176,7 +177,7 @@ describe("Tool Search", () => {
     });
   });
 
-  function validatedSearchFixture() {
+  function validatedSearchFixture(name = TOOL_SEARCH_RAW_TOOL_NAME) {
     const catalogRef = createToolSearchCatalogRef();
     registerHeadlessToolSearchCatalog({
       catalogRef,
@@ -194,7 +195,7 @@ describe("Tool Search", () => {
           tools: { toolSearch: { mode: "tools", searchDefaultLimit: 2, maxSearchLimit: 50 } },
         },
       },
-      TOOL_SEARCH_RAW_TOOL_NAME,
+      name,
     );
     const execute = async (input: Record<string, unknown>) => {
       const args = validateToolArguments(searchTool, {
@@ -208,13 +209,11 @@ describe("Tool Search", () => {
     return { catalogRef, execute };
   }
 
-  it("preserves scalar-first order and distinct limits for duplicate mixed queries", async () => {
-    const { catalogRef, execute } = validatedSearchFixture();
-    const scalar = await execute({ query: "Slack", limit: 1 });
+  it("preserves request order and distinct limits for duplicate batch queries", async () => {
+    const { catalogRef, execute } = validatedSearchFixture(TOOL_SEARCH_BATCH_TOOL_NAME);
     const result = await execute({
-      query: " Slack ",
-      limit: 1,
       queries: [
+        { query: " Slack ", limit: 1 },
         { query: "calendar", limit: 1 },
         { query: "Slack", limit: 2 },
         { query: "Slack", limit: 3 },
@@ -222,7 +221,10 @@ describe("Tool Search", () => {
     });
     expect(result.details).toEqual({
       results: [
-        { query: "Slack", candidates: scalar.details },
+        {
+          query: "Slack",
+          candidates: [expect.objectContaining({ name: expect.stringContaining("fake_slack_") })],
+        },
         { query: "calendar", candidates: [expect.objectContaining({ name: "fake_calendar" })] },
         { query: "Slack", candidates: expect.any(Array) },
         { query: "Slack", candidates: expect.any(Array) },
@@ -230,18 +232,18 @@ describe("Tool Search", () => {
     });
     const groups = resultDetails(result).results as Array<{ candidates: unknown[] }>;
     expect(groups.map((group) => group.candidates.length)).toEqual([1, 1, 2, 3]);
-    expect(catalogRef.current?.searchCount).toBe(5);
+    expect(catalogRef.current?.searchCount).toBe(4);
   });
 
   it("rejects missing searches after argument validation", async () => {
     const { catalogRef, execute } = validatedSearchFixture();
-    await expect(execute({})).rejects.toThrow(/provide query or queries|non-empty array/);
+    await expect(execute({})).rejects.toThrow("Validation failed");
     expect(catalogRef.current?.searchCount).toBe(0);
   });
 
   it("does not discard a non-null top-level batch limit", async () => {
     const limit = 1;
-    const { catalogRef, execute } = validatedSearchFixture();
+    const { catalogRef, execute } = validatedSearchFixture(TOOL_SEARCH_BATCH_TOOL_NAME);
     await expect(execute({ query: null, limit, queries: [{ query: "Slack" }] })).rejects.toThrow(
       /Validation failed|set limit on each batch query/,
     );
@@ -250,23 +252,26 @@ describe("Tool Search", () => {
 
   it.each([
     {
-      input: { query: "Slack", limit: 25, queries: [{ query: "Slack", limit: 26 }] },
+      input: {
+        queries: [
+          { query: "Slack", limit: 25 },
+          { query: "Slack", limit: 26 },
+        ],
+      },
       error: "resolve to 51 results",
     },
     {
       input: {
-        query: "Slack",
-        limit: 1,
-        queries: Array.from({ length: 16 }, () => ({ query: "Slack", limit: 1 })),
+        queries: Array.from({ length: 17 }, () => ({ query: "Slack", limit: 1 })),
       },
-      error: "at most 16 entries",
+      error: "Validation failed",
     },
     {
-      input: { query: "é".repeat(127), limit: 1, queries: [{ query: "é".repeat(127), limit: 1 }] },
+      input: { queries: Array.from({ length: 2 }, () => ({ query: "é".repeat(127), limit: 1 })) },
       error: "at most 512 UTF-8 bytes",
     },
-  ])("counts the scalar duplicate toward batch budgets: $error", async ({ input, error }) => {
-    const { catalogRef, execute } = validatedSearchFixture();
+  ])("counts every batch entry toward budgets: $error", async ({ input, error }) => {
+    const { catalogRef, execute } = validatedSearchFixture(TOOL_SEARCH_BATCH_TOOL_NAME);
     await expect(execute(input)).rejects.toThrow(error);
     expect(catalogRef.current?.searchCount).toBe(0);
   });
@@ -277,7 +282,7 @@ describe("Tool Search", () => {
       [pluginTool("fake_atomic", "atomic validation surface")],
       { config },
     );
-    const searchTool = controlTool(ctx, TOOL_SEARCH_RAW_TOOL_NAME);
+    const searchTool = controlTool(ctx, TOOL_SEARCH_BATCH_TOOL_NAME);
 
     await expect(
       searchTool.execute("call-invalid-later-item", {
@@ -313,7 +318,8 @@ describe("Tool Search", () => {
       (candidate) => candidate.id,
     );
 
-    const result = await searchTool.execute("call-bounded-response", {
+    const batchTool = controlTool(ctx, TOOL_SEARCH_BATCH_TOOL_NAME);
+    const result = await batchTool.execute("call-bounded-response", {
       queries: Array.from({ length: 5 }, () => ({ query: "large surface", limit: 10 })),
     });
     const details = resultDetails(result);
@@ -332,7 +338,7 @@ describe("Tool Search", () => {
     }
 
     const manyGroups = resultDetails(
-      await searchTool.execute("call-bounded-many-groups", {
+      await batchTool.execute("call-bounded-many-groups", {
         queries: Array.from({ length: 16 }, () => ({ query: "large surface", limit: 1 })),
       }),
     );
@@ -368,7 +374,7 @@ describe("Tool Search", () => {
 
     const clientTool = fakeTool(`client_large_name_${"n".repeat(20_000)}`, "oversized metadata");
     addClientToolsToToolCatalog({ tools: [clientTool], ...ctx, enabled: true });
-    const searchTool = controlTool(ctx, TOOL_SEARCH_RAW_TOOL_NAME);
+    const searchTool = controlTool(ctx, TOOL_SEARCH_BATCH_TOOL_NAME);
 
     const result = resultDetails(
       await searchTool.execute("call-repeated-huge-metadata", {

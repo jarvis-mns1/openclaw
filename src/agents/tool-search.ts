@@ -20,6 +20,7 @@ import { renderToolSearchControlText } from "./tool-search-control-result.js";
 import { applyToolSchemaDirectoryCatalog } from "./tool-search-directory.js";
 import {
   prepareToolSearchDispatcherArguments,
+  readToolSearchBatchRequest,
   readToolSearchCallArgs,
   readToolSearchId,
   readToolSearchRequest,
@@ -38,6 +39,7 @@ import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
+  TOOL_SEARCH_BATCH_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
   type ToolSearchMode,
@@ -60,6 +62,7 @@ export {
 export {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_BATCH_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search-types.js";
 export type {
@@ -228,70 +231,32 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
       description:
-        "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action; use tool_describe only when you need its input schema.",
-      parameters: Type.Object({
-        query: Type.Optional(
-          Type.Union([Type.String(), Type.Null()], {
-            description:
-              "Single search query, in English. A non-empty query joins a non-empty batch first. Null or blank is ignored beside a non-empty batch.",
+        "Search the effective Tool Search catalog with one English query. Matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action; use tool_describe only when you need its input schema.",
+      parameters: Type.Object(
+        {
+          query: Type.String({
+            description: "Search query, in English. Describe the capability you need.",
           }),
-        ),
-        limit: Type.Optional(
-          Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], {
-            description:
-              "Maximum number of single-search results. Omitted or null uses the default. With only batch queries, omit this or set it to null; set limits on each batch entry.",
-          }),
-        ),
-        queries: Type.Optional(
-          Type.Union(
-            [
-              // Let the parser handle empty or null batch placeholders beside a scalar.
-              Type.Array(
-                Type.Object({
-                  query: Type.String({
-                    minLength: 1,
-                    maxLength: MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
-                    description: "Search query, in English. Describe the capability you need.",
-                  }),
-                  limit: Type.Optional(
-                    Type.Integer({
-                      minimum: 1,
-                      description: `Maximum results for this query. Defaults to ${config.searchDefaultLimit} when omitted.`,
-                    }),
-                  ),
-                }),
-                { maxItems: MAX_TOOL_SEARCH_BATCH_QUERIES },
-              ),
-              Type.Null(),
-            ],
-            {
-              description: `Independent searches. Prefer this alone for several searches; a non-empty query beside it runs as the first entry. Their effective limits may total at most ${MAX_TOOL_SEARCH_RESULTS}; an omitted item limit counts as ${config.searchDefaultLimit}. The serialized query strings may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes in total.`,
-            },
+          limit: Type.Optional(
+            Type.Integer({
+              minimum: 1,
+              maximum: config.maxSearchLimit,
+              description: `Maximum results. Defaults to ${config.searchDefaultLimit} when omitted.`,
+            }),
           ),
-        ),
-      }),
+        },
+        { additionalProperties: false },
+      ),
       execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
         const request = readToolSearchRequest(args, config);
-        if (request.kind === "single") {
-          return formatToolSearchControlResult(
-            await runtime.search(request.search.query, {
-              limit: request.search.limit,
-              parentToolCallId: toolCallId,
-            }),
-            runtime,
-            { parentToolCallId: toolCallId },
-          );
-        }
-        const results = await Promise.all(
-          request.searches.map(async (search) => ({
-            query: search.query,
-            candidates: await runtime.search(search.query, {
-              limit: search.limit,
-              parentToolCallId: toolCallId,
-            }),
-          })),
+        return formatToolSearchControlResult(
+          await runtime.search(request.query, {
+            limit: request.limit,
+            parentToolCallId: toolCallId,
+          }),
+          runtime,
+          { parentToolCallId: toolCallId },
         );
-        return formatToolSearchBatchResponse(results, runtime.hasNetworkContent(toolCallId));
       },
     },
     {
@@ -368,6 +333,53 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         } catch (error) {
           throw formatToolSearchControlError(error, runtime, toolCallId, signal ?? ctx.abortSignal);
         }
+      },
+    },
+    {
+      name: TOOL_SEARCH_BATCH_TOOL_NAME,
+      label: "Tool Search Batch",
+      description: `Search the effective Tool Search catalog with up to ${MAX_TOOL_SEARCH_BATCH_QUERIES} independent English queries in one call. Results stay grouped in request order. Use this when one planning step needs several capabilities.`,
+      parameters: Type.Object(
+        {
+          queries: Type.Array(
+            Type.Object(
+              {
+                query: Type.String({
+                  minLength: 1,
+                  maxLength: MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
+                  description: "Search query, in English. Describe one capability you need.",
+                }),
+                limit: Type.Optional(
+                  Type.Integer({
+                    minimum: 1,
+                    maximum: config.maxSearchLimit,
+                    description: `Maximum results for this query. Defaults to ${config.searchDefaultLimit} when omitted.`,
+                  }),
+                ),
+              },
+              { additionalProperties: false },
+            ),
+            {
+              minItems: 1,
+              maxItems: MAX_TOOL_SEARCH_BATCH_QUERIES,
+              description: `Independent searches. Their effective limits may total at most ${MAX_TOOL_SEARCH_RESULTS}; an omitted limit counts as ${config.searchDefaultLimit}. Serialized query strings may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes in total.`,
+            },
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
+        const searches = readToolSearchBatchRequest(args, config);
+        const results = await Promise.all(
+          searches.map(async (search) => ({
+            query: search.query,
+            candidates: await runtime.search(search.query, {
+              limit: search.limit,
+              parentToolCallId: toolCallId,
+            }),
+          })),
+        );
+        return formatToolSearchBatchResponse(results, runtime.hasNetworkContent(toolCallId));
       },
     },
   ];

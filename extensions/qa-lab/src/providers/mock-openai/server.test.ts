@@ -2759,14 +2759,14 @@ describe("qa mock openai server", () => {
     [
       "plans one structured batch search for the Tool Search gateway fixture",
       {
-        tools: [{ type: "function", name: "tool_search" }],
+        tools: ["tool_search", "tool_search_batch"].map((name) => ({ type: "function", name })),
         input: [
           makeUserInput(
             "tool search qa check target=fake_plugin_tool_17. Call exactly that tool once and then summarize.",
           ),
         ],
       },
-      "tool_search",
+      "tool_search_batch",
       {
         queries: [
           { query: "fake_plugin_tool_17", limit: 1 },
@@ -2789,9 +2789,9 @@ describe("qa mock openai server", () => {
   it.each([
     {
       name: "calls the selected catalog tool after a structured batch search",
-      tools: ["tool_search", "dispatch_action"],
-      callName: "tool_search",
-      callId: "call_tool_search_1",
+      tools: ["tool_search_batch", "dispatch_action"],
+      callName: "tool_search_batch",
+      callId: "call_tool_search_batch_1",
       args: { queries: catalogQueries },
       output: JSON.stringify({
         results: catalogQueries.map(({ query }) => ({ query, candidates: [{ name: query }] })),
@@ -2800,9 +2800,9 @@ describe("qa mock openai server", () => {
     },
     {
       name: "does not call a catalog tool when structured search returns no matching candidate",
-      tools: ["tool_search", "dispatch_action"],
-      callName: "tool_search",
-      callId: "call_tool_search_1",
+      tools: ["tool_search_batch", "dispatch_action"],
+      callName: "tool_search_batch",
+      callId: "call_tool_search_batch_1",
       args: { queries: [{ query: catalogTarget, limit: 1 }] },
       output: JSON.stringify({ results: [{ query: catalogTarget, candidates: [] }] }),
       invokes: false,

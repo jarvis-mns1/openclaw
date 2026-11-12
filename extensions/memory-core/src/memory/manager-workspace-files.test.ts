@@ -248,6 +248,7 @@ describe("Gateway index over Harness workspace files", () => {
       await fs.writeFile(path.join(harness, "memory/first.md"), "alpha first.");
       const manager = await fixture.getPersistentManager(createConfig());
       await manager.sync({ reason: "initial", force: true });
+      const discoveryFailure = new Error("discovery unavailable");
       if (outcome === "newer-index") {
         const database = Reflect.get(manager, "publishedDatabase") as MemoryIndexDatabase;
         const meta = database.facts.meta;
@@ -256,7 +257,7 @@ describe("Gateway index over Harness workspace files", () => {
         }
         await database.writeMetadata({ ...meta, chunkingVersion: meta.chunkingVersion + 1 });
       } else {
-        vi.spyOn(files, "listFiles").mockRejectedValueOnce(new Error("discovery unavailable"));
+        vi.spyOn(files, "listFiles").mockRejectedValueOnce(discoveryFailure);
       }
       const owner = manager as unknown as {
         runSync: (params?: Parameters<typeof manager.sync>[0]) => Promise<void>;
@@ -273,6 +274,7 @@ describe("Gateway index over Harness workspace files", () => {
       changed();
       await entered.promise;
       try {
+        await fs.writeFile(path.join(harness, "memory/first.md"), "beta pending generation.");
         for (let i = 0; i < 64; i += 1) {
           changed();
         }
@@ -280,13 +282,19 @@ describe("Gateway index over Harness workspace files", () => {
         resume.resolve();
       }
       const settled = await Promise.allSettled(sync.mock.results.map((result) => result.value));
-      expect(manager.status().dirty).toBe(true);
-      expect(run).toHaveBeenCalledTimes(outcome === "newer-index" ? 2 : 1);
+      expect(manager.status().dirty).toBe(outcome === "newer-index");
+      expect(run).toHaveBeenCalledTimes(2);
       expect(
-        settled.every(
-          (result) => result.status === (outcome === "newer-index" ? "fulfilled" : "rejected"),
+        settled.every((result) =>
+          outcome === "newer-index"
+            ? result.status === "fulfilled"
+            : result.status === "rejected" && result.reason === discoveryFailure,
         ),
       ).toBe(true);
+      using index = new DatabaseSync(manager.status().dbPath!, { readOnly: true });
+      expect(index.prepare(`SELECT text FROM ${MEMORY_INDEX_CHUNKS_TABLE}`).all()).toEqual([
+        { text: outcome === "newer-index" ? "alpha first." : "beta pending generation." },
+      ]);
     },
   );
 

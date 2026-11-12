@@ -208,6 +208,12 @@ active turn for another home does not block them. If the bundle changes again
 during startup, OpenClaw fences the stale client before login or `thread/start`
 and uses the normal bounded startup retry.
 
+Desktop observation uses native candidate-entry watches and bounded recursive
+bundle scans. Registration or capacity failures report unhealthy service status.
+Gateway shutdown joins pending watcher registration, watcher retirement, and
+in-flight fingerprint reads. A failed watcher retirement prevents replacement
+watchers from starting and remains visible as a shutdown failure.
+
 Explicit `appServer.command` and `OPENCLAW_CODEX_APP_SERVER_BIN` clients remain
 operator-owned and are not retired by standard desktop update events. Restart
 the Gateway after replacing a custom executable.

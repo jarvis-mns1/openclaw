@@ -7,6 +7,15 @@ import {
 } from "./tool-replay-safety.js";
 
 describe("agent tool replay safety", () => {
+  it("classifies batch discovery as replay-safe without trusting duplicate or denied instances", () => {
+    const batch = { name: "tool_search_batch" };
+    expect(isAgentToolReplaySafe(batch)).toBe(true);
+    expect(isAgentToolRestartSafe(batch)).toBe(true);
+    expect(isAgentToolReplaySafe(batch, { declaredReplaySafe: () => false })).toBe(false);
+    expect(collectReplaySafeToolNames([batch, { ...batch }])).toEqual(new Set());
+    expect(isAgentToolReplaySafe({ name: "dispatch_action" })).toBe(false);
+  });
+
   it("allows only audited unconditional core tools", () => {
     expect(isAgentToolReplaySafe({ name: "search" })).toBe(true);
     expect(isAgentToolReplaySafe({ name: "progress_card" })).toBe(false);

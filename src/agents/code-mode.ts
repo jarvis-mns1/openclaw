@@ -40,9 +40,7 @@ import {
 } from "./tool-search-catalog.js";
 import { formatToolSearchControlResult, type ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
-  TOOL_CALL_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_RAW_TOOL_NAME,
+  TOOL_SEARCH_CONTROL_TOOL_NAMES,
   type ToolSearchCatalogEntry,
   type ToolSearchCatalogRef,
   type ToolSearchToolContext,
@@ -325,11 +323,7 @@ export function applyCodeModeCatalog(params: {
   const tools = finalizeAgentToolAvailability(params.tools, {
     toolExecutionAllow: params.toolExecutionAllow,
   }).filter(
-    (tool) =>
-      isCodeModeControlTool(tool) ||
-      (tool.name !== TOOL_SEARCH_RAW_TOOL_NAME &&
-        tool.name !== TOOL_DESCRIBE_RAW_TOOL_NAME &&
-        tool.name !== TOOL_CALL_RAW_TOOL_NAME),
+    (tool) => isCodeModeControlTool(tool) || !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name),
   );
   const directToolNames = new Set(params.directToolNames);
   const compacted = applyToolCatalogCompaction({

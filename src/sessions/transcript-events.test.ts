@@ -1,5 +1,6 @@
 // Transcript event tests cover transcript event parsing and compaction.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { emitSessionIdentityMutation } from "./session-lifecycle-events.js";
 import {
   attachSessionTranscriptRunId,
   emitSessionTranscriptUpdate,
@@ -18,6 +19,37 @@ afterEach(() => {
 });
 
 describe("transcript events", () => {
+  it("owns internal identity notifications with the transcript subscription", () => {
+    const transcript = vi.fn();
+    const identity = vi.fn();
+    const publicListener = vi.fn();
+    cleanup.push(onSessionTranscriptUpdate(publicListener));
+    const unsubscribe = onInternalSessionTranscriptUpdate(transcript, {
+      onIdentityMutation: identity,
+    });
+    cleanup.push(unsubscribe);
+    const mutation = {
+      databaseIdentity: Symbol("isolated-session-store"),
+      agentId: "main",
+      kind: "replace" as const,
+      previous: { sessionId: "previous", sessionKeys: ["agent:main:main"] },
+      current: { sessionId: "current", sessionKeys: ["agent:main:main"] },
+    };
+
+    emitSessionIdentityMutation(mutation);
+    expect(identity).toHaveBeenCalledExactlyOnceWith(mutation);
+    expect(transcript).not.toHaveBeenCalled();
+    expect(publicListener).not.toHaveBeenCalled();
+    emitSessionTranscriptUpdate({ sessionFile: "/tmp/isolated-session.jsonl" });
+    expect(transcript).toHaveBeenCalledOnce();
+
+    unsubscribe();
+    emitSessionIdentityMutation(mutation);
+    emitSessionTranscriptUpdate({ sessionFile: "/tmp/isolated-session.jsonl" });
+    expect(identity).toHaveBeenCalledOnce();
+    expect(transcript).toHaveBeenCalledOnce();
+  });
+
   it.each(["assistant", "toolResult"])("persists normalized run ownership on %s rows", (role) => {
     const message = { role, content: [], __openclaw: { seq: 2 } };
 

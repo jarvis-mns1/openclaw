@@ -34,7 +34,7 @@ hosted Ollama routes and the OpenAI-compatible transport keep the general defaul
 
 When enabled for OpenClaw runs, the model automatically receives a bounded
 directory of the available trusted tool names and descriptions, plus the
-structured `tool_search`, `tool_describe`, and `dispatch_action` controls. Setting
+structured `tool_search`, `tool_search_batch`, `tool_describe`, and `dispatch_action` controls. Setting
 `tools.toolSearch: true` or an object without a mode selects this structured
 surface. Direct-only tools remain visible alongside the controls.
 
@@ -88,10 +88,10 @@ policy, approval, hook, logging, and result handling still apply.
 `tools.toolSearch` has two model-facing modes:
 
 - `tools`: the default when `tools.toolSearch` is unset, `true`, or an object
-  without a mode. Exposes `tool_search`,
+  without a mode. Exposes `tool_search`, `tool_search_batch`,
   `tool_describe`, and `dispatch_action` as plain structured tools, alongside the
   capability directory and direct-only tools.
-- `directory`: exposes `tool_search`, `tool_describe`, and `dispatch_action` plus a
+- `directory`: exposes `tool_search`, `tool_search_batch`, `tool_describe`, and `dispatch_action` plus a
   bounded, cache-stable prompt directory. Core coding primitives, direct-only
   tools, and tools required by the run's delivery policy remain visible; other
   schemas stay deferred.
@@ -127,7 +127,7 @@ selection.
 Tool Search changes the shape:
 
 - direct tools: the model sees every selected schema before the first token
-- Tool Search tools mode: the model sees three compact structured
+- Tool Search tools mode: the model sees four compact structured
   tools, the same capability directory, and any direct-only tools
 - Tool Search directory mode: the model sees a bounded directory plus
   search/describe/call controls, policy-required direct tools, and any
@@ -157,8 +157,10 @@ catalog, without rerunning the hook or rewriting earlier conversation turns.
 
 ### Search
 
-`tool_search` searches the effective catalog for the current run. It accepts a
-query and an optional limit.
+`tool_search` searches the effective catalog for the current run. It requires one
+string `query` and accepts an optional positive-integer `limit`. Omit `limit` to
+use the default; `null` is not a valid limit. A blank query returns an empty
+candidate array. Use `tool_search_batch` for multiple independent queries.
 
 Queries must be written in English. Ranking is lexical (Okapi BM25 over tool
 names, descriptions, and first-party parameter names and descriptions), with
@@ -255,15 +257,8 @@ by name. A compact search signature may be enough to call it; use
 
 ### Batch search
 
-`tool_search` accepts either the single-query shape or a batch of
-independent queries:
-
-```json
-{
-  "query": "today's calendar events",
-  "limit": 3
-}
-```
+`tool_search_batch` accepts one non-empty `queries` array. Scalar and batch
+search have separate schemas; neither accepts the other's search fields:
 
 ```json
 {
@@ -274,21 +269,17 @@ independent queries:
 }
 ```
 
-Single-query calls continue to return the compact candidate array directly.
-When both shapes contain searches, the non-empty `query` runs first, with the
-top-level `limit` scoped to it. Batch entries follow in request order, including
-repeated query text; each occurrence keeps its own limit and counts toward the
-batch budgets.
+Scalar calls return the compact candidate array directly. Batch entries follow
+request order, including repeated query text; each occurrence keeps its own
+limit and counts toward the batch budgets. Set limits directly on each entry,
+not at batch level or inside `options`. Mixed scalar/batch requests are rejected
+before any search instead of silently dropping a capability request.
 
-Beside a non-empty batch, an omitted, `null`, empty, or whitespace-only `query`
-is ignored. In that case, omit the top-level `limit` or set it to `null`; a
-non-null top-level limit is rejected rather than applied to the batch.
-An omitted or `null` `queries` retains scalar behavior, and `queries: []` also
-falls back to the scalar shape when `query` is non-empty. A blank scalar query
-without a batch still returns an empty candidate array. A missing or `null`
-scalar with no batch, or an empty batch with no non-empty scalar, is rejected.
-A scalar `limit: null` uses the default limit, just like an omitted limit.
-Invalid query shapes, invalid limits, and over-budget batches still fail.
+Some providers remove schema closure during projection. At that boundary, the
+runtime tolerates only empty legacy placeholders (`queries: null` or `[]` beside
+a scalar, or `query: null`, `""`, or whitespace beside a batch). Empty `options`
+objects and a batch-level `limit: null` are also ignored; meaningful or malformed
+values still fail. These placeholders are not advertised in either schema.
 
 Batch calls return `{ results: [{ query, candidates }] }` in request order. Each
 query uses the same effective catalog, ranking, filtering, and per-query limit
@@ -309,6 +300,7 @@ with no matches returns an empty `candidates` array.
 Directory mode exposes:
 
 - `tool_search`
+- `tool_search_batch`
 - `tool_describe`
 - `dispatch_action`
 
@@ -477,7 +469,7 @@ The regression proves:
 4. Tool Search exposes compact structured controls plus any direct-only tools.
 5. The Tool Search request payload is smaller for the large fake catalog.
 6. Session logs show the expected tool-call counts.
-7. Structured mode resolves two queries with one `tool_search` call before the
+7. Structured mode resolves two queries with one `tool_search_batch` call before the
    selected plugin tool runs through `dispatch_action`.
 
 ### Real-model comparison

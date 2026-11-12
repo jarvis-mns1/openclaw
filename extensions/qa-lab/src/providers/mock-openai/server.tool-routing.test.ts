@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { expect, it, describe } from "vitest";
 import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
 import type { AnthropicMessage } from "./mock-openai-contracts.js";
+import { QA_TOOL_SEARCH_SECONDARY_TARGET } from "./mock-openai-tooling.js";
 import {
   type AnthropicResponse,
   ANTHROPIC_GUEST_CODE_MODE_TOOLS,
@@ -33,12 +34,16 @@ import {
 } from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
-const catalogTools = ["dispatch_action", "tool_search", "tool_describe", "sessions_yield"].map(
-  (name) => ({
-    type: "function",
-    name,
-  }),
-);
+const catalogTools = [
+  "dispatch_action",
+  "tool_search",
+  "tool_search_batch",
+  "tool_describe",
+  "sessions_yield",
+].map((name) => ({
+  type: "function",
+  name,
+}));
 const shellExec = {
   type: "function",
   name: "exec",
@@ -113,6 +118,28 @@ it.each([
     expect(outputText(continuation)).toBe("NO_REPLY");
   },
 );
+
+it("keeps namespaced batch discovery and dispatch on their declared controls", async () => {
+  const target = "fake_plugin_tool_17";
+  const turn = await startTurn(`tool search qa check target=${target}`, { tools: namespace });
+  const search = outputToolCall(await turn.request(), "tool_search_batch");
+  const queries = [
+    { query: target, limit: 1 },
+    { query: QA_TOOL_SEARCH_SECONDARY_TARGET, limit: 1 },
+  ];
+  expect(search.namespace).toBe("openclaw");
+  expect(callArgs(search)).toEqual({ queries });
+  const result = await turn.complete(
+    search,
+    JSON.stringify({
+      results: queries.map(({ query }) => ({ query, candidates: [{ name: query }] })),
+    }),
+  );
+  expect(outputItems(result)).toHaveLength(1);
+  const dispatch = outputToolCall(result, "dispatch_action");
+  expect(dispatch.namespace).toBe("openclaw");
+  expect(callArgs(dispatch)).toMatchObject({ id: target });
+});
 
 it.each(["sessions_spawn", "ls"])(
   "routes %s runtime fixtures without mistaking instruction arguments for fixture targets",

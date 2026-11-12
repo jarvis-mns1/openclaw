@@ -3,11 +3,13 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
-  emitAgentActivityEvent,
+  type emitAgentActivityEvent,
   projectAgentToolActivity,
   type AgentItemEventData,
 } from "../infra/agent-activity-events.js";
+import { getAgentEventExecutionContext } from "../infra/agent-event-execution-context.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { resolveCompletedActivityWrappers } from "./agent-activity-presentation.js";
@@ -218,16 +220,56 @@ export function emitAgentEventCallbackBestEffort(
   });
 }
 
+export function emitToolHandlerAgentEvent(
+  ctx: ToolHandlerContext,
+  event: Pick<Parameters<typeof emitAgentEvent>[0], "stream" | "data">,
+): void {
+  const origin = ctx.toolEventOrigin;
+  const current = origin ? getAgentRunContext(ctx.params.runId) : undefined;
+  const captured = origin
+    ? getAgentEventExecutionContext().getStore()?.routingByRun?.get(ctx.params.runId)
+    : undefined;
+  const originContext = origin?.context?.deref();
+  // A shared weak identity still matches after its registration is collected.
+  const retainedOriginRouting =
+    origin &&
+    captured?.routing.lifecycleGeneration === origin.lifecycleGeneration &&
+    (captured.owner === origin.context ||
+      (originContext && captured.owner.deref() === originContext))
+      ? captured.routing
+      : undefined;
+  // Retained routing cannot authorize publication into a replacement registration.
+  if (
+    (origin?.context && current && originContext !== current) ||
+    (captured && !retainedOriginRouting)
+  ) {
+    return;
+  }
+  const routing = current ?? retainedOriginRouting;
+  if (
+    origin?.isControlUiVisible === false &&
+    (routing?.isControlUiVisible !== false ||
+      routing.lifecycleGeneration !== origin.lifecycleGeneration)
+  ) {
+    // Hidden observer traffic stays private; channel callbacks settle independently.
+    return;
+  }
+  const owner = origin ?? ctx.params;
+  emitAgentEvent({
+    ...event,
+    runId: ctx.params.runId,
+    ...(owner.sessionKey ? { sessionKey: owner.sessionKey } : {}),
+    ...(owner.agentId ? { agentId: owner.agentId } : {}),
+    ...(origin ? { lifecycleGeneration: origin.lifecycleGeneration } : {}),
+  });
+}
+
 type ActivityWithoutOwner<T = Parameters<typeof emitAgentActivityEvent>[0]> = T extends unknown
   ? Omit<T, "runId" | "sessionKey">
   : never;
 
 export function emitToolActivityEvent(ctx: ToolHandlerContext, event: ActivityWithoutOwner): void {
-  emitAgentActivityEvent({
-    runId: ctx.params.runId,
-    ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-    ...event,
-  });
+  emitToolHandlerAgentEvent(ctx, event);
   emitAgentEventCallbackBestEffort(ctx, { stream: event.stream, data: event.data });
 }
 
@@ -479,7 +521,7 @@ export function handleToolExecutionStart(
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
-    emitAgentEvent({ runId: ctx.params.runId, ...createStartEvent() });
+    emitToolHandlerAgentEvent(ctx, createStartEvent());
     // Best-effort typing signal; do not block tool summaries on slow emitters.
     emitAgentEventCallbackBestEffort(ctx, createStartEvent());
 

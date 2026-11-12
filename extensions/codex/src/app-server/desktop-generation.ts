@@ -1,6 +1,13 @@
 /** Lifecycle-owned generation for managed macOS Codex desktop artifacts. */
-import { existsSync, watch, type FSWatcher } from "node:fs";
+import { existsSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
+import {
+  admitObservationRoot,
+  watch,
+  type WatchOptions,
+  type WatchSubscription,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import type {
   OpenClawPluginServiceV2,
   OpenClawPluginServiceContextV2,
@@ -20,11 +27,7 @@ const APPLICATIONS_PATH = "/Applications";
 const REARM_INITIAL_DELAY_MS = 100;
 
 type GenerationOwner = ReturnType<typeof createCodexDesktopGenerationOwner>;
-type WatchFactory = (
-  watchedPath: string,
-  options: { recursive: boolean },
-  listener: (eventType: string, filename: string | Buffer | null) => void,
-) => FSWatcher;
+type WatchFactory = (watchedPath: string, options: WatchOptions) => Promise<WatchSubscription>;
 type DesktopGenerationRuntime = {
   platform: NodeJS.Platform;
   readFingerprint: () => Promise<string>;
@@ -35,7 +38,9 @@ type DesktopGenerationRuntime = {
 type DesktopGenerationState = {
   owner?: GenerationOwner;
   lastGeneration?: CodexDesktopGeneration;
-  watchers?: Set<FSWatcher>;
+  watchers?: Set<WatchSubscription>;
+  watcherAdmission?: Promise<boolean>;
+  watcherRetirement?: Promise<void>;
   watchHealthy?: boolean;
   context?: OpenClawPluginServiceContextV2;
   runtime?: DesktopGenerationRuntime;
@@ -64,7 +69,18 @@ export function createCodexDesktopGenerationService(
     readFingerprint: readMacOSDesktopGenerationFingerprint,
     resolveWatchPaths: resolveMacOSDesktopGenerationWatchPaths,
     pathExists: existsSync,
-    watchPath: (watchedPath, options, listener) => watch(watchedPath, options, listener),
+    watchPath: async (watchedPath, options) => {
+      const canonical = await realpath(watchedPath);
+      const authority = await admitObservationRoot(canonical);
+      const relative = path.relative(authority.rootDir, canonical);
+      return watch(authority, {
+        ...options,
+        scopes: options.scopes.map((scope) => ({
+          ...scope,
+          path: path.join(relative, scope.path),
+        })),
+      });
+    },
   },
 ): OpenClawPluginServiceV2 {
   return {
@@ -75,16 +91,21 @@ export function createCodexDesktopGenerationService(
         return;
       }
       const current = state();
+      await current.watcherRetirement;
       current.context = ctx;
       current.runtime = { ...runtime };
-      current.owner = createCodexDesktopGenerationOwner({
+      const owner = createCodexDesktopGenerationOwner({
         signal: ctx.scheduler.signal,
         readFingerprint: runtime.readFingerprint,
         onGenerationChange: params.onGenerationChange,
         initialGeneration: current.lastGeneration,
       });
-      armWatchers(current);
-      void refreshGeneration(current, current.owner.refresh());
+      current.owner = owner;
+      owner.markDirty();
+      await armWatchers(current);
+      if (isCurrentOwner(current, owner)) {
+        void refreshGeneration(current, owner, owner.refresh());
+      }
     },
     async stop() {
       const current = state();
@@ -96,61 +117,102 @@ export function createCodexDesktopGenerationService(
       current.context = undefined;
       current.runtime = undefined;
       current.watchHealthy = undefined;
-      closeWatchers(current);
-      await Promise.all([scheduler?.stop(), owner?.waitForIdle()]);
+      await joinRetirement([closeWatchers(current), scheduler?.stop(), owner?.waitForIdle()]);
     },
   };
 }
 
-function armWatchers(current: DesktopGenerationState, retryOnFailure = true): boolean {
+function armWatchers(current: DesktopGenerationState, retryOnFailure = true): Promise<boolean> {
   const owner = current.owner;
   const runtime = current.runtime;
   if (!owner || !runtime || current.watchers) {
-    return false;
+    return Promise.resolve(false);
   }
-  const watchers = new Set<FSWatcher>();
+  const watchers = new Set<WatchSubscription>();
   current.watchers = watchers;
   const candidateNames = new Set<string>(
     resolveMacOSDesktopCodexAppPathCandidates("darwin").map((candidate) => candidate.appName),
   );
-  let complete = true;
-  for (const watchedPath of runtime.resolveWatchPaths()) {
-    if (!runtime.pathExists(watchedPath)) {
-      continue;
-    }
-    try {
-      // Bundle roots need recursive invalidation: nested plugin bytes can change without
-      // updating the app directory metadata that the settled fingerprint observes first.
-      const watcher = runtime.watchPath(
-        watchedPath,
-        { recursive: watchedPath !== APPLICATIONS_PATH },
-        (_eventType, filename) => {
-          if (
-            watchedPath === APPLICATIONS_PATH &&
-            filename &&
-            !candidateNames.has(filename.toString().split(path.sep)[0] ?? "")
-          ) {
-            return;
-          }
-          owner.markDirty();
-          scheduleRearm(current, owner);
-        },
-      );
+  const admission = Promise.resolve().then(async () => {
+    let complete = true;
+    for (const watchedPath of runtime.resolveWatchPaths()) {
+      if (!isCurrentArm(current, owner, watchers)) {
+        return false;
+      }
+      if (!runtime.pathExists(watchedPath)) {
+        continue;
+      }
+      let watcher: WatchSubscription;
+      let ready = false;
+      try {
+        watcher = await runtime.watchPath(watchedPath, {
+          // Native subscriptions avoid main-process Node FSEvents close. Bound bundle
+          // scans while preserving nested Computer Use artifact invalidation.
+          scopes:
+            watchedPath === APPLICATIONS_PATH
+              ? [...candidateNames].map((name) => ({ path: name, kind: "entry" }))
+              : [{ path: ".", kind: "tree", depth: 128 }],
+          mode: "events",
+          onInvalidate: () => {
+            // Admission's reconcile invalidation must not start a rearm loop.
+            if (!ready || !isCurrentArm(current, owner, watchers)) {
+              return;
+            }
+            owner.markDirty();
+            scheduleRearm(current, owner);
+          },
+          onHealth: (health) => {
+            if (!isCurrentArm(current, owner, watchers) || health.state !== "unavailable") {
+              return;
+            }
+            complete = false;
+            reportWatcherFailure(
+              current,
+              owner,
+              health.failure?.error ?? new Error("Desktop watch unavailable"),
+            );
+            if (ready || retryOnFailure) {
+              scheduleRearm(current, owner, false);
+            }
+          },
+        });
+      } catch (error) {
+        if (isCurrentArm(current, owner, watchers)) {
+          complete = false;
+          reportWatcherFailure(current, owner, error);
+        }
+        continue;
+      }
       watchers.add(watcher);
-      watcher.on("error", (error) => {
-        reportWatcherFailure(current, owner, error);
-        scheduleRearm(current, owner);
-      });
-    } catch (error) {
-      complete = false;
-      reportWatcherFailure(current, owner, error);
+      if (!isCurrentArm(current, owner, watchers)) {
+        // Retirement already captured the admitted handles; join this late one here.
+        await watcher.close();
+        return false;
+      }
+      try {
+        await watcher.ready;
+        ready = true;
+        if (isCurrentArm(current, owner, watchers)) {
+          owner.markDirty();
+        }
+      } catch (error) {
+        if (isCurrentArm(current, owner, watchers)) {
+          complete = false;
+          reportWatcherFailure(current, owner, error);
+        }
+      }
     }
-  }
-  current.watchHealthy = complete;
-  if (!complete && retryOnFailure) {
-    scheduleRearm(current, owner, false);
-  }
-  return complete;
+    if (!isCurrentArm(current, owner, watchers)) {
+      return false;
+    }
+    current.watchHealthy = complete;
+    if (!complete && retryOnFailure) {
+      scheduleRearm(current, owner, false);
+    }
+    return complete;
+  });
+  current.watcherAdmission = admission;
+  return admission;
 }
 
 function reportWatcherFailure(
@@ -158,7 +220,7 @@ function reportWatcherFailure(
   owner: GenerationOwner,
   error: unknown,
 ): void {
-  if (current.watchHealthy === false) {
+  if (!isCurrentOwner(current, owner) || current.watchHealthy === false) {
     return;
   }
   current.watchHealthy = false;
@@ -167,40 +229,68 @@ function reportWatcherFailure(
   current.context?.logger.warn(`codex desktop generation watcher failed: ${String(error)}`);
 }
 
+function isCurrentOwner(current: DesktopGenerationState, owner: GenerationOwner): boolean {
+  return current.owner === owner && current.context?.scheduler.signal.aborted === false;
+}
+
+function isCurrentArm(
+  current: DesktopGenerationState,
+  owner: GenerationOwner,
+  watchers: Set<WatchSubscription>,
+): boolean {
+  return isCurrentOwner(current, owner) && current.watchers === watchers;
+}
+
 function scheduleRearm(
   current: DesktopGenerationState,
   owner: GenerationOwner,
   retryOnFailure = true,
 ): void {
-  if (current.context?.scheduler.signal.aborted) {
+  if (!isCurrentOwner(current, owner)) {
     return;
   }
   current.context?.scheduler.schedule({
     id: "watcher-rearm",
     delayMs: REARM_INITIAL_DELAY_MS,
     run: async () => {
+      if (!isCurrentOwner(current, owner)) {
+        return;
+      }
       const wasUnhealthy = current.watchHealthy === false;
-      closeWatchers(current);
-      if (!armWatchers(current, retryOnFailure) || wasUnhealthy) {
+      try {
+        await closeWatchers(current);
+      } catch (error) {
+        reportWatcherFailure(current, owner, error);
+        return;
+      }
+      if (!isCurrentOwner(current, owner)) {
+        return;
+      }
+      const healthy = await armWatchers(current, retryOnFailure);
+      if (!isCurrentOwner(current, owner)) {
+        return;
+      }
+      if (!healthy || wasUnhealthy) {
         owner.markDirty();
       }
-      await refreshGeneration(current, owner.wait());
+      await refreshGeneration(current, owner, owner.wait());
     },
   });
 }
 
 function refreshGeneration(
   current: DesktopGenerationState,
+  owner: GenerationOwner,
   refresh: Promise<CodexDesktopGeneration | undefined>,
 ): Promise<void> {
   return refresh
     .then(() => {
-      if (!current.context?.scheduler.signal.aborted && current.watchHealthy) {
+      if (isCurrentOwner(current, owner) && current.watchHealthy) {
         current.context?.serviceHealth?.clearFailure();
       }
     })
     .catch((error: unknown) => {
-      if (!current.context || current.context.scheduler.signal.aborted) {
+      if (!isCurrentOwner(current, owner)) {
         return;
       }
       current.context?.serviceHealth?.reportFailure(error);
@@ -208,10 +298,39 @@ function refreshGeneration(
     });
 }
 
-function closeWatchers(current: DesktopGenerationState): void {
+function closeWatchers(current: DesktopGenerationState): Promise<void> {
   const watchers = current.watchers;
+  const admission = current.watcherAdmission;
+  if (!watchers && !admission) {
+    return current.watcherRetirement ?? Promise.resolve();
+  }
   current.watchers = undefined;
-  for (const watcher of watchers ?? []) {
-    watcher.close();
+  current.watcherAdmission = undefined;
+  // Fence callbacks first. All handles and admitted work settle even if one close fails.
+  const retirement = joinRetirement([
+    current.watcherRetirement,
+    ...Array.from(watchers ?? [], async (watcher) => watcher.close()),
+    admission,
+  ]);
+  current.watcherRetirement = retirement;
+  void retirement.then(
+    () => {
+      if (current.watcherRetirement === retirement) {
+        current.watcherRetirement = undefined;
+      }
+    },
+    () => {}, // Preserve failed retirement for stop and prohibit replacement watchers.
+  );
+  return retirement;
+}
+
+async function joinRetirement(work: (Promise<unknown> | undefined)[]): Promise<void> {
+  const pending = work.filter((item): item is Promise<unknown> => item !== undefined);
+  const settled = await Promise.allSettled(pending);
+  const failures = settled.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Codex desktop generation retirement failed");
   }
 }

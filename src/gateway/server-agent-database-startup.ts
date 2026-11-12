@@ -147,22 +147,25 @@ export function activateGatewayAgentDatabaseStartup(params: {
         const previousSecrets = getActiveSecretsRuntimeSnapshot();
         if (
           !previousSecrets ||
-          !(await refreshActiveSecretsRuntimeSnapshotForConfig({
-            sourceConfig: previousSecrets.sourceConfig,
-            runtimeSourceConfig: getRuntimeConfigSourceSnapshot() ?? undefined,
-            includeAuthStoreRefs: true,
-            assertCurrent: () => {
-              signal.throwIfAborted();
-              assertCurrent();
-              if (
-                !params.isCurrent() ||
-                params.getConfig() !== beforeConfig ||
-                getActiveSecretsRuntimeSnapshotRevision() !== previousSecretsRevision
-              ) {
-                throw new AgentDatabaseStartupSupersededError(agentId, "secrets");
-              }
-            },
-          }))
+          // Auth publication can enqueue model work that inherits this registry scope.
+          !(await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
+            refreshActiveSecretsRuntimeSnapshotForConfig({
+              sourceConfig: previousSecrets.sourceConfig,
+              runtimeSourceConfig: getRuntimeConfigSourceSnapshot() ?? undefined,
+              includeAuthStoreRefs: true,
+              assertCurrent: () => {
+                signal.throwIfAborted();
+                assertCurrent();
+                if (
+                  !params.isCurrent() ||
+                  params.getConfig() !== beforeConfig ||
+                  getActiveSecretsRuntimeSnapshotRevision() !== previousSecretsRevision
+                ) {
+                  throw new AgentDatabaseStartupSupersededError(agentId, "secrets");
+                }
+              },
+            }),
+          ))
         ) {
           throw new Error(`Agent ${agentId} secrets preparation could not publish`);
         }

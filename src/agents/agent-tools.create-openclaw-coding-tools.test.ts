@@ -433,6 +433,7 @@ describe("createOpenClawCodingTools", () => {
 
     expect(createOpenClawToolsMock).not.toHaveBeenCalled();
     expect(names.has("tool_search")).toBe(true);
+    expect(names.has("tool_search_batch")).toBe(true);
     expect(names.has("tool_describe")).toBe(true);
     expect(names.has("dispatch_action")).toBe(true);
     expect(names.has("message")).toBe(false);
