@@ -147,6 +147,7 @@ describe("derived npm lock mirror", () => {
     (change) => {
       const input = fixture();
       const childPath = "node_modules/npm/node_modules/ip-address";
+      const child: Record<string, unknown> = { version: "10.7.5", inBundle: true };
       const packages: Record<string, Record<string, unknown>> = {
         "node_modules/npm": {
           version: "12.2.2",
@@ -155,19 +156,19 @@ describe("derived npm lock mirror", () => {
         },
         "node_modules/npm/node_modules/glob": { version: "14.0.2", inBundle: true },
         "node_modules/npm/node_modules/minimatch": { version: "11.0.1", inBundle: true },
-        [childPath]: { version: "10.7.5", inBundle: true },
+        [childPath]: child,
       };
       if (change === "version") {
-        packages[childPath].version = "10.7.4";
+        child.version = "10.7.4";
       }
       if (change === "name") {
-        packages[childPath].name = "other";
+        child.name = "other";
       }
       if (change === "unbundled") {
-        packages[childPath].inBundle = false;
+        child.inBundle = false;
       }
       if (change === "path") {
-        packages["node_modules/ip-address"] = packages[childPath];
+        packages["node_modules/ip-address"] = child;
         delete packages[childPath];
       }
       if (change === "missing") {
