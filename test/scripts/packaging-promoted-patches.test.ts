@@ -126,8 +126,11 @@ function fixture(isolated = false) {
       name: "closure-leaf",
       version: "1.0.0",
       main: "index.js",
+      dependencies: { events: "3.3.0" },
     });
     json(`${nodeModules}/closure-leaf/index.js`, "module.exports = 'frozen leaf';\n");
+    json(`${nodeModules}/events/package.json`, { name: "events", version: "3.3.0" });
+    json(`${nodeModules}/events/index.js`, "module.exports = 'frozen browser events';\n");
   }
   // Preserve an existing root link even though it is not the owning importer's patched bytes.
   json("unpatched/package.json", { name: "matrix-js-sdk", version: "42.4.0" });
@@ -214,6 +217,17 @@ describe("selected plugin patched runtime packaging", () => {
         expect(createRequire(path.join(packed, "package.json"))(dependency)).toBe(
           "patched:frozen leaf",
         );
+        expect(
+          fs.readFileSync(
+            path.join(
+              packed,
+              "node_modules",
+              dependency,
+              "node_modules/closure-child/node_modules/closure-leaf/node_modules/events/index.js",
+            ),
+            "utf8",
+          ),
+        ).toBe("module.exports = 'frozen browser events';\n");
       }
       expect(createRequire(path.join(packed, "package.json"))("closure-child")).toBe(
         "wrong root version",

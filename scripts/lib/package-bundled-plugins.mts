@@ -54,8 +54,9 @@ async function copyInstalledRuntimeClosure(
     ...Object.keys(manifest.peerDependencies ?? {}),
   ]);
   for (const name of names) {
+    // Bare built-in names such as events have no package lookup paths.
     const candidate = require.resolve
-      .paths(name)
+      .paths(`${name}/package.json`)
       ?.map((dir) => path.join(dir, name))
       .find((dir) => existsSync(path.join(dir, "package.json")));
     if (!candidate) {
