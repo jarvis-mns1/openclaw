@@ -562,6 +562,120 @@ describe("maybeRepairPluginRegistryState", () => {
     );
   });
 
+  it("repairs five same-version relocated bundle records without changing authored state or files", async () => {
+    const stateDir = makeTempDir();
+    const currentRoot = path.join(stateDir, "runtime-b");
+    const previousRoot = path.join(stateDir, "runtime-a");
+    const ids = ["probe-one", "probe-two", "probe-three", "probe-four", "probe-five"];
+    const records: Record<string, PluginInstallRecord> = {};
+    const version = "2026.11.3";
+    for (const packageRoot of [previousRoot, currentRoot]) {
+      fs.mkdirSync(packageRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version }),
+      );
+      for (const id of ids) {
+        const rootDir = path.join(packageRoot, "dist", "extensions", id);
+        fs.mkdirSync(rootDir, { recursive: true });
+        createBundledCandidate({ rootDir, id, packageName: `@openclaw/${id}`, version });
+        if (packageRoot === previousRoot) {
+          records[id] = {
+            source: "path",
+            sourcePath: rootDir,
+            installPath: rootDir,
+            version,
+            installedAt: "2026-11-12T00:00:00.000Z",
+          };
+        }
+      }
+    }
+    const externalRoot = path.join(stateDir, "external-lcm");
+    fs.mkdirSync(externalRoot);
+    createCandidate(externalRoot, "lcm");
+    records.lcm = { source: "path", sourcePath: externalRoot, installPath: externalRoot };
+    const config: OpenClawConfig = {
+      plugins: {
+        enabled: true,
+        allow: [...ids, "lcm"],
+        deny: ["probe-four"],
+        load: { paths: [externalRoot] },
+        slots: { memory: "probe-three", contextEngine: "lcm" },
+        entries: {
+          ...Object.fromEntries(ids.map((id) => [id, { enabled: true, config: { marker: id } }])),
+          "probe-one": {
+            enabled: true,
+            config: { marker: "authored" },
+            hooks: { allowPromptInjection: false, allowConversationAccess: true },
+            llm: { allowModelOverride: false, allowedModels: ["fixture/model"] },
+            subagent: { allowModelOverride: false },
+          },
+          "probe-two": { enabled: false, config: { marker: "disabled" } },
+          lcm: { enabled: true, config: { marker: "external-derived" } },
+        },
+      },
+    };
+    const configBefore = structuredClone(config);
+    const configPath = path.join(stateDir, "openclaw.json");
+    const configBytes = `${JSON.stringify(config, null, 2)}\n`;
+    fs.writeFileSync(configPath, configBytes);
+    const readTree = (rootDir: string) =>
+      Object.fromEntries(
+        fs.readdirSync(rootDir, { recursive: true, withFileTypes: true }).flatMap((entry) => {
+          const file = path.join(entry.parentPath, entry.name);
+          return entry.isFile() ? [[path.relative(rootDir, file), fs.readFileSync(file)]] : [];
+        }),
+      );
+    const treesBefore = [previousRoot, currentRoot, externalRoot].map(readTree);
+    const params = {
+      config,
+      stateDir,
+      env: hermeticEnv({
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_VERSION: version,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(currentRoot, "dist", "extensions"),
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      }),
+    };
+    await writePersistedInstalledPluginIndex(
+      { ...createCurrentIndex(), installRecords: records },
+      { stateDir },
+    );
+    await maybeRepairPluginRegistryState({ ...params, prompter: { shouldRepair: false } });
+    expect((await readRequiredPersistedInstalledPluginIndex(stateDir)).installRecords).toEqual(
+      records,
+    );
+
+    const result = await maybeRepairPluginRegistryState({
+      ...params,
+      prompter: { shouldRepair: true },
+    });
+    const repaired = await readRequiredPersistedInstalledPluginIndex(stateDir);
+    expect(repaired.installRecords).toEqual({ lcm: records.lcm });
+    for (const id of ids) {
+      expect(repaired.plugins.find((plugin) => plugin.pluginId === id)).toMatchObject({
+        rootDir: path.join(currentRoot, "dist", "extensions", id),
+        origin: "bundled",
+        enabled: id !== "probe-two" && id !== "probe-four",
+      });
+    }
+    expect(repaired.plugins.find((plugin) => plugin.pluginId === "lcm")).toMatchObject({
+      rootDir: externalRoot,
+      origin: "config",
+      enabled: true,
+    });
+    expect(result.config).toBe(config);
+    expect(config).toEqual(configBefore);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(configBytes);
+    expect([previousRoot, currentRoot, externalRoot].map(readTree)).toEqual(treesBefore);
+
+    await maybeRepairPluginRegistryState({ ...params, prompter: { shouldRepair: true } });
+    expect((await readRequiredPersistedInstalledPluginIndex(stateDir)).installRecords).toEqual(
+      repaired.installRecords,
+    );
+  });
+
   it("removes stale managed npm packages from the package lock during repair", async () => {
     const { stateDir, managed, params } = createBundledNpmFixture({ packageLock: true });
     await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
