@@ -203,6 +203,7 @@ async function listStaleLocalBundledPluginInstallRecordShadows(
 ): Promise<StaleLocalBundledPluginInstallRecord[]> {
   return listStaleLocalBundledPluginInstallRecords({
     installRecords: await loadInstalledPluginIndexInstallRecords(params),
+    config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
     bundled: loadCurrentBundledPluginSources(params),

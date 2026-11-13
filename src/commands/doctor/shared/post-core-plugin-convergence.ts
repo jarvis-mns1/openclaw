@@ -226,6 +226,7 @@ async function runPostCorePluginConvergenceWithLease(
   const prunedBaseline = convergenceBaseline
     ? pruneStaleLocalBundledPluginInstallRecords({
         installRecords: convergenceBaseline,
+        config: params.cfg,
         env,
       })
     : null;
