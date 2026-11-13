@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripMemoryAnnotationCarriers } from "../../packages/memory-host-sdk/src/host/curated-annotations.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
@@ -21,7 +22,21 @@ import type {
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
 
-function legacyCoverageWarning(status: MemoryProviderStatus): string | undefined {
+function hasReadyIndexWithUnprobedProvider(status: MemoryProviderStatus): boolean {
+  return (
+    status.requestedProvider !== "none" &&
+    asNullableRecord(status.custom?.providerState)?.mode === "pending" &&
+    asNullableRecord(status.custom?.indexIdentity)?.status === "valid" &&
+    status.dirty === false &&
+    status.vector?.enabled === true &&
+    status.vector.index?.state === "complete"
+  );
+}
+
+function legacyCoverageWarning(
+  status: MemoryProviderStatus,
+  allowUnprobedProvider = false,
+): string | undefined {
   const stale = resolveMemorySearchStaleness(status);
   if (stale) {
     return stale.warning;
@@ -29,7 +44,11 @@ function legacyCoverageWarning(status: MemoryProviderStatus): string | undefined
   const providerState = status.custom?.providerState;
   if (providerState && typeof providerState === "object" && "mode" in providerState) {
     // A lazy manager with embeddings explicitly disabled has nothing semantic to initialize.
-    if (providerState.mode === "pending" && status.requestedProvider !== "none") {
+    if (
+      providerState.mode === "pending" &&
+      status.requestedProvider !== "none" &&
+      !allowUnprobedProvider
+    ) {
       return "Memory embeddings are pending. Search results may be incomplete.";
     }
     if (
@@ -289,10 +308,12 @@ export async function adaptLegacyMemoryProvider(
       },
     };
   };
-  const readCoverage = async (includeCounts?: boolean) => {
+  const readCoverage = async (includeCounts?: boolean, passiveHealth = false) => {
     try {
       const status = await readMemorySearchManagerStatus(manager, { includeCounts });
-      return { status, warning: legacyCoverageWarning(status) };
+      // Transient status managers have not initialized embeddings; persisted coverage is separate.
+      const unprobedProvider = passiveHealth && hasReadyIndexWithUnprobedProvider(status);
+      return { status, warning: legacyCoverageWarning(status, unprobedProvider), unprobedProvider };
     } catch {
       assertCurrent();
       // Diagnostics must not discard an otherwise successful, authorized search.
@@ -356,10 +377,14 @@ export async function adaptLegacyMemoryProvider(
       };
     },
     async health() {
-      const { status, warning } = await readCoverage();
+      const { status, warning, unprobedProvider } = await readCoverage(undefined, true);
       return {
         status: warning ? "degraded" : "ready",
-        message: warning,
+        message:
+          warning ??
+          (unprobedProvider
+            ? "Memory index is ready. Embedding provider readiness was not probed by this status request."
+            : undefined),
         ...(status ? { details: { legacy: redactLegacyHealthDetails(status) } } : {}),
       };
     },

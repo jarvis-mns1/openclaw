@@ -1,5 +1,6 @@
 /** Tests selected-owner fallback, caller revocation, and legacy compatibility at the resolver. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MemoryProviderStatus } from "../memory-host-sdk/host/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { delegateMemoryAudience, resolveMemoryAudienceFromEntry } from "./memory-audience.js";
 import { fakeSessionOwner } from "./memory-audience.test-support.js";
@@ -479,6 +480,101 @@ describe("provider-neutral memory resolver", () => {
       await bound.close();
     }
   });
+
+  it.each([
+    { name: "complete lazy index", overrides: {}, ready: true },
+    { name: "dirty index", overrides: { dirty: true }, ready: false },
+    { name: "unknown index cleanliness", overrides: { dirty: undefined }, ready: false },
+    {
+      name: "failed last sync",
+      overrides: { lastSyncError: "synthetic embedding failure" },
+      ready: false,
+    },
+    {
+      name: "incomplete vectors",
+      overrides: { vector: { enabled: true, index: { state: "incomplete" } } },
+      ready: false,
+    },
+    {
+      name: "unverified vectors",
+      overrides: { vector: { enabled: true, index: { state: "unverified" } } },
+      ready: false,
+    },
+    {
+      name: "unverified identity",
+      overrides: { custom: { providerState: { mode: "pending" } } },
+      ready: false,
+    },
+    {
+      name: "mismatched identity",
+      overrides: {
+        custom: {
+          providerState: { mode: "pending" },
+          indexIdentity: {
+            status: "mismatched",
+            reason: "synthetic format change",
+            code: "chunking_version",
+            owner: "openclaw",
+          },
+        },
+      },
+      ready: false,
+    },
+    {
+      name: "failed provider",
+      overrides: {
+        custom: { providerState: { mode: "degraded" }, indexIdentity: { status: "valid" } },
+      },
+      ready: false,
+    },
+    {
+      name: "keyword fallback",
+      overrides: {
+        custom: { providerState: { mode: "fts-only" }, indexIdentity: { status: "valid" } },
+      },
+      ready: false,
+    },
+  ] satisfies Array<{ name: string; overrides: Partial<MemoryProviderStatus>; ready: boolean }>)(
+    "reports passive health for $name without probing or weakening search coverage",
+    async ({ overrides, ready }) => {
+      const oldManager = manager();
+      const status: MemoryProviderStatus = {
+        backend: "builtin",
+        provider: "openai",
+        requestedProvider: "openai",
+        dirty: false,
+        vector: { enabled: true, index: { state: "complete" } },
+        custom: {
+          providerState: { mode: "pending", requestedProvider: "openai" },
+          indexIdentity: { status: "valid" },
+        },
+        ...overrides,
+      };
+      vi.spyOn(oldManager, "status").mockReturnValue(status);
+      const embeddingProbe = vi.spyOn(oldManager, "probeEmbeddingAvailability");
+      const vectorProbe = vi.spyOn(oldManager, "probeVectorAvailability");
+      oldManager.sync = vi.fn(async () => {});
+      state.capability.runtime = legacy(oldManager);
+      const bound = (await open()).provider!;
+      try {
+        const health = await bound.health();
+        expect(health.status).toBe(ready ? "ready" : "degraded");
+        if (ready) {
+          expect(health.message).toBe(
+            "Memory index is ready. Embedding provider readiness was not probed by this status request.",
+          );
+        }
+        expect(health.details?.legacy).toMatchObject(status);
+        expect(oldManager.search).not.toHaveBeenCalled();
+        expect(oldManager.sync).not.toHaveBeenCalled();
+        expect(embeddingProbe).not.toHaveBeenCalled();
+        expect(vectorProbe).not.toHaveBeenCalled();
+        expect((await bound.search({ query: "remember" })).coverage).toBe("partial");
+      } finally {
+        await bound.close();
+      }
+    },
+  );
 
   it.each(["search", "readFile"] as const)(
     "rejects a legacy manager missing %s",
