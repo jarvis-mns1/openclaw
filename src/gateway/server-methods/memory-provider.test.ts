@@ -1,6 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { MemoryProviderHandle } from "../../plugins/memory-provider-types.js";
+import type { MemoryProviderStatus } from "../../memory-host-sdk/host/types.js";
+import { adaptLegacyMemoryProvider } from "../../plugins/memory-provider-adapter.js";
+import type {
+  MemoryProviderHandle,
+  MemoryProviderOpenParams,
+} from "../../plugins/memory-provider-types.js";
+import type {
+  MemoryPluginRuntime,
+  RegisteredMemorySearchManager,
+} from "../../plugins/registry-contribution-types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
@@ -165,6 +174,85 @@ describe("provider-neutral memory RPC", () => {
         }),
       }),
     );
+  });
+
+  it("keeps passive health ready after a separate transient hybrid search", async () => {
+    const managers: Array<ReturnType<typeof makeManager>> = [];
+    function makeManager() {
+      let initialized = false;
+      return {
+        search: vi.fn(async () => {
+          initialized = true;
+          return [];
+        }),
+        readFile: vi.fn<RegisteredMemorySearchManager["readFile"]>(async () => ({
+          status: "not_found",
+          text: "",
+          path: "missing",
+        })),
+        status: (): MemoryProviderStatus => ({
+          backend: "builtin",
+          provider: "openai",
+          requestedProvider: "openai",
+          dirty: false,
+          vector: { enabled: true, index: { state: "complete" } },
+          custom: {
+            providerState: { mode: initialized ? "ready" : "pending" },
+            indexIdentity: { status: "valid" },
+            searchMode: "hybrid",
+          },
+        }),
+        probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+        probeVectorAvailability: vi.fn(async () => true),
+        close: vi.fn(async () => {}),
+      };
+    }
+    const runtime: MemoryPluginRuntime = {
+      getMemorySearchManager: async () => {
+        const manager = makeManager();
+        managers.push(manager);
+        return { manager };
+      },
+      resolveMemoryBackendConfig: () => ({ backend: "builtin" }),
+    };
+    mocks.acquire.mockImplementation(async (params: MemoryProviderOpenParams) => ({
+      ...(await adaptLegacyMemoryProvider(runtime, "memory-core", params)),
+      providerId: "memory-core",
+    }));
+    const search = request("memory.search", {
+      version: 2,
+      query: "synthetic phrase",
+      agentId: "main",
+    });
+    await invoke("memory.search", search);
+    expect(search.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ coverage: "complete" }),
+      undefined,
+    );
+    const health = request("memory.status", { agentId: "main" });
+    await invoke("memory.status", health);
+    expect(health.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        status: "ready",
+        message:
+          "Memory index is ready. Embedding provider readiness was not probed by this status request.",
+        details: {
+          legacy: expect.objectContaining({
+            custom: expect.objectContaining({ providerState: { mode: "pending" } }),
+          }),
+        },
+      }),
+      undefined,
+    );
+    expect(managers).toHaveLength(2);
+    expect(managers[1]!.search).not.toHaveBeenCalled();
+    for (const manager of managers) {
+      expect(manager.probeEmbeddingAvailability).not.toHaveBeenCalled();
+      expect(manager.probeVectorAvailability).not.toHaveBeenCalled();
+      expect(manager.close).toHaveBeenCalledOnce();
+    }
   });
 
   it.each([
