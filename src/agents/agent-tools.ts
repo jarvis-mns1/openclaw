@@ -80,13 +80,8 @@ import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js"
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
 import { hasRestrictiveAllowPolicy, replaceWithEffectiveToolAllowlist } from "./tool-policy.js";
-import {
-  createToolSearchTools,
-  resolveToolSearchConfig,
-  TOOL_CALL_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_RAW_TOOL_NAME,
-} from "./tool-search.js";
+import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "./tool-search-types.js";
+import { createToolSearchTools, resolveToolSearchConfig } from "./tool-search.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
 import { createGitHubPublishTool } from "./tools/github-publish-tool.js";
 import { resolveHeartbeatTools } from "./tools/heartbeat-response-tool.js";
@@ -138,7 +133,7 @@ function* assembleOpenClawCodingTools(
   const toolSearchControlsEnabled =
     options?.includeToolSearchControls === true && toolSearchConfig.enabled;
   const toolSearchControlAllowlist = toolSearchControlsEnabled
-    ? [TOOL_SEARCH_RAW_TOOL_NAME, TOOL_DESCRIBE_RAW_TOOL_NAME, TOOL_CALL_RAW_TOOL_NAME]
+    ? [...TOOL_SEARCH_CONTROL_TOOL_NAMES]
     : [];
   const runtimeAllowlistIncludesMessage = runtimeToolAllowlistIncludesMessage(
     options?.runtimeToolAllowlist ?? [],

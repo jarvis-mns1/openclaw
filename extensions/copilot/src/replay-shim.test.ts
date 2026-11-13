@@ -151,6 +151,9 @@ describe("copilotToolMetasHavePotentialSideEffects", () => {
     );
     expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "sessions_list" }])).toBe(false);
     expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "tool_search" }])).toBe(false);
+    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "tool_search_batch" }])).toBe(
+      false,
+    );
     expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "web_fetch" }])).toBe(false);
     expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "web_search" }])).toBe(false);
   });
@@ -160,6 +163,11 @@ describe("copilotToolMetasHavePotentialSideEffects", () => {
   });
 
   it("detects async-started tools even without a mutating name", () => {
+    expect(
+      copilotToolMetasHavePotentialSideEffects([
+        { asyncStarted: true, toolName: "tool_search_batch" },
+      ]),
+    ).toBe(true);
     expect(
       copilotToolMetasHavePotentialSideEffects([{ asyncStarted: true, toolName: "read" }]),
     ).toBe(true);

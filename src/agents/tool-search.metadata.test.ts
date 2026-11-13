@@ -10,6 +10,7 @@ import {
   createToolSearchTools,
   registerHeadlessToolSearchCatalog,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_BATCH_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
 
@@ -84,7 +85,7 @@ describe("Tool Search metadata provenance", () => {
   it("fits batch model text within 4000 characters after wrapping and token expansion", async () => {
     const { entry, tool } = setup("mcp");
     entry.description = "<|endoftext|> ".repeat(30);
-    const result = await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute("metadata-batch", {
+    const result = await tool(TOOL_SEARCH_BATCH_TOOL_NAME).execute("metadata-batch", {
       queries: Array.from({ length: 10 }, () => ({ query: entry.id, limit: 1 })),
     });
     const text = modelText(result);

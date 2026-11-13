@@ -9,6 +9,11 @@ import {
   PATCHED_MCP_CLI,
   PATCHED_MCP_NAME,
 } from "./package-bundled-mcp.mts";
+import {
+  collectPatchedNpmArtifactErrors,
+  PATCHED_NPM_NAME,
+  PATCHED_NPM_RUNTIME_SPECIFIERS,
+} from "./package-bundled-npm.mts";
 import { collectPackageDistImportErrors } from "./package-dist-imports.mjs";
 import { isRecord } from "./record-shared.mjs";
 
@@ -175,13 +180,17 @@ export function collectBundledDependencyErrors({
   const bundledDependencies = new Set(listBundleDependencies(packageJson));
   const required = new Map<string, string>([
     [PATCHED_MCP_NAME, "its patched runtime must not be replaced by the registry package"],
+    [PATCHED_NPM_NAME, "its patched runtime must not be replaced by the registry package"],
   ]);
   if (requireBundledWorkspaceDeps) {
     required.set("@openclaw/ai", "it is private to the OpenClaw workspace");
   }
   const names = new Set(bundledDependencies);
   for (const [name, reason] of required) {
-    if (typeof dependencies[name] !== "string") {
+    if (
+      typeof dependencies[name] !== "string" &&
+      !(name === PATCHED_NPM_NAME && Object.hasOwn(dependencies, name))
+    ) {
       continue;
     }
     names.add(name);
@@ -231,6 +240,18 @@ export function collectBundledDependencyErrors({
     const bundled = { ...runtime, name };
     if (name === PATCHED_MCP_NAME) {
       errors.push(...collectPatchedMcpErrors(bundled, manifest, dependencies[PATCHED_MCP_NAME]));
+    } else if (name === PATCHED_NPM_NAME) {
+      errors.push(
+        ...collectPatchedNpmArtifactErrors({
+          ...runtime,
+          manifest,
+          declaredVersion: dependencies[PATCHED_NPM_NAME],
+          importResolutions: resolveBundledPackageSpecifiers(
+            path.join(runtime.packageRoot, "node_modules", PATCHED_NPM_NAME),
+            PATCHED_NPM_RUNTIME_SPECIFIERS,
+          ),
+        }),
+      );
     } else if (name === "@openclaw/ai") {
       errors.push(...collectBundledAiRuntimeErrors(bundled, manifest));
     }

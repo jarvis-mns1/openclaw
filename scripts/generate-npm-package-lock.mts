@@ -30,6 +30,7 @@ import { resolveNpmRunner } from "./npm-runner.mts";
 
 type UnknownRecord = Record<string, unknown>;
 type OverrideMap = Record<string, unknown>;
+type BundledPackageManifests = Map<string, { name: string; version: string }>;
 type ScopedOverrides = Record<string, Record<string, string>>;
 type NpmLockExecInvocation = UnknownRecord & {
   env?: NodeJS.ProcessEnv;
@@ -1137,12 +1138,24 @@ const NPM_BUNDLED_DEPENDENCY_POLICIES = new Map(
   ]),
 );
 
-function isApprovedNpmBundledDependency(packages: UnknownRecord, lockPath: string) {
+function isApprovedNpmBundledDependency(
+  packages: UnknownRecord,
+  lockPath: string,
+  verifiedBundle?: BundledPackageManifests,
+) {
+  const verified = verifiedBundle?.get(lockPath);
+  const dependency = recordAt(packages, lockPath);
+  if (verified) {
+    return (
+      dependency?.inBundle === true &&
+      dependency.version === verified.version &&
+      (dependency.name ?? parseLockPackagePath(lockPath).at(-1)?.name) === verified.name
+    );
+  }
   const npm = recordAt(packages, "node_modules/npm");
   const npmVersion = typeof npm?.version === "string" ? npm.version : undefined;
   const policy = npmVersion ? NPM_BUNDLED_DEPENDENCY_POLICIES.get(npmVersion) : undefined;
   const expectedVersion = policy?.exceptions.get(lockPath);
-  const dependency = recordAt(packages, lockPath);
   return (
     expectedVersion !== undefined &&
     npm !== undefined &&
@@ -1158,6 +1171,7 @@ function isApprovedNpmBundledDependency(packages: UnknownRecord, lockPath: strin
 function collectOverrideViolations(
   lockfile: unknown,
   overrideRules: Record<string, string>,
+  verifiedBundle?: BundledPackageManifests,
 ): OverrideViolation[] {
   const packages = recordAt(lockfile, "packages");
   if (!packages) {
@@ -1165,7 +1179,7 @@ function collectOverrideViolations(
   }
   const violations: OverrideViolation[] = [];
   for (const [lockPath, metadata] of Object.entries(packages)) {
-    if (isApprovedNpmBundledDependency(packages, lockPath)) {
+    if (isApprovedNpmBundledDependency(packages, lockPath, verifiedBundle)) {
       continue;
     }
     const packagePath = parseLockPackagePath(lockPath);
@@ -1356,9 +1370,10 @@ function collectUnallowedOverrideViolations(
   lockfile: unknown,
   overrideRules: Record<string, string>,
   overrides: OverrideMap,
+  verifiedBundle?: BundledPackageManifests,
 ) {
   const packages = recordAt(lockfile, "packages");
-  const broadViolations = collectOverrideViolations(lockfile, overrideRules);
+  const broadViolations = collectOverrideViolations(lockfile, overrideRules, verifiedBundle);
   if (!packages) {
     return [];
   }
@@ -1436,7 +1451,7 @@ function collectUnallowedOverrideViolations(
       reachedPaths.add(dependencyPath);
       if (
         matched.expectedSpec &&
-        !isApprovedNpmBundledDependency(packages, dependencyPath) &&
+        !isApprovedNpmBundledDependency(packages, dependencyPath, verifiedBundle) &&
         (installedVersion === undefined ||
           !semver.satisfies(installedVersion, matched.expectedSpec, { includePrerelease: true }) ||
           (matched.expectedPackageName !== undefined &&
@@ -1499,13 +1514,19 @@ function disableDependencyShrinkwrapOverrideConflictSources(
   lockfile: unknown,
   overrideRules: Record<string, string>,
   overrides: OverrideMap = overrideRules,
+  verifiedBundle?: BundledPackageManifests,
 ) {
   const packages = recordAt(lockfile, "packages");
   if (!packages) {
     return [];
   }
   const disabled = new Set<string>();
-  for (const violation of collectUnallowedOverrideViolations(lockfile, overrideRules, overrides)) {
+  for (const violation of collectUnallowedOverrideViolations(
+    lockfile,
+    overrideRules,
+    overrides,
+    verifiedBundle,
+  )) {
     for (const source of violation.shrinkwrapSources) {
       const sourceMetadata = packages[source];
       if (isRecord(sourceMetadata)) {
@@ -1535,7 +1556,13 @@ function describeOverrideViolations(violations: ReturnType<typeof collectOverrid
     .join("; ");
 }
 
-function installNpmPackageLock(tempDir: string, npmInstallArgs: string[], env: NodeJS.ProcessEnv) {
+function installNpmPackageLock(
+  tempDir: string,
+  npmInstallArgs: string[],
+  env: NodeJS.ProcessEnv,
+  localPackageArtifacts: NpmLocalPackageArtifact[],
+  npmBundleTarball?: Buffer,
+) {
   const npmLockPath = path.join(tempDir, "package-lock.json");
   const enforcedOverrides = readWorkspaceOverrides();
   const overrideRules = validationOverrideRulesFromOverrides(enforcedOverrides);
@@ -1547,7 +1574,18 @@ function installNpmPackageLock(tempDir: string, npmInstallArgs: string[], env: N
     runNpm(npmInstallArgs, tempDir, env);
     const npmLockText = readFileSync(npmLockPath, "utf8");
     const npmLock = parseJsonObject(npmLockText);
-    const remaining = collectUnallowedOverrideViolations(npmLock, overrideRules, enforcedOverrides);
+    const verifiedBundle = verifiedNpmBundlePackages(
+      recordAt(npmLock, "packages") ?? {},
+      npmBundleTarball,
+      readPnpmLockPackageIntegrities(),
+      localPackageArtifacts,
+    );
+    const remaining = collectUnallowedOverrideViolations(
+      npmLock,
+      overrideRules,
+      enforcedOverrides,
+      verifiedBundle,
+    );
     if (remaining.length === 0) {
       // npm can assign nested override sets differently on a fresh tree than when it
       // reloads that lock, so `npm ci` rejects a first-pass lock as out of sync.
@@ -1569,6 +1607,7 @@ function installNpmPackageLock(tempDir: string, npmInstallArgs: string[], env: N
       npmLock,
       overrideRules,
       enforcedOverrides,
+      verifiedBundle,
     );
     const packages = recordAt(npmLock, "packages") ?? {};
     const newSources = newlyDisabled.filter((source) => {
@@ -1636,6 +1675,10 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
     );
     const localPackageArtifacts = options.localPackageArtifacts ?? [];
     validateLocalPackageArtifacts(packageDir, localPackageArtifacts);
+    const localNpm = localPackageArtifacts.find(({ name }) => name === "npm");
+    let npmBundleTarball = localNpm
+      ? readFileSync(path.resolve(packageDir, localNpm.spec.slice("file:".length)))
+      : undefined;
     const installOverrides = readNpmLockOverrides(packageJson, packageDir, localPackageArtifacts);
     const normalizedPackageJson = packageJsonForNpmLock(
       packageJson,
@@ -1661,15 +1704,18 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
     copyLocalFileDependencies(normalizedPackageJson, packageDir, tempDir);
     // Lock-derived overrides steer npm placement. Only explicit workspace overrides
     // are policy that dependency shrinkwraps must not violate.
-    installNpmPackageLock(tempDir, npmInstallArgs, env);
+    installNpmPackageLock(tempDir, npmInstallArgs, env, localPackageArtifacts, npmBundleTarball);
     const generated = normalizeNpmVersionDrift(
       applyPackageExtensionPeerMetadata(
         parseJsonObject(readFileSync(path.join(tempDir, "package-lock.json"), "utf8")),
       ),
     );
-    let npmBundleTarball: Buffer | undefined;
     const npmVersion = recordAt(recordAt(generated, "packages"), "node_modules/npm")?.version;
-    if (typeof npmVersion === "string" && NPM_BUNDLED_DEPENDENCY_POLICIES.has(npmVersion)) {
+    if (
+      !localNpm &&
+      typeof npmVersion === "string" &&
+      NPM_BUNDLED_DEPENDENCY_POLICIES.has(npmVersion)
+    ) {
       runNpm(
         ["pack", `npm@${npmVersion}`, "--ignore-scripts", "--pack-destination", tempDir],
         tempDir,
@@ -1690,6 +1736,7 @@ function verifiedNpmBundlePackages(
   packages: UnknownRecord,
   tarball: Buffer | undefined,
   pnpmIntegrities: Map<string, Set<string>>,
+  localPackageArtifacts: NpmLocalPackageArtifact[] = [],
 ) {
   const manifests = new Map<string, { name: string; version: string }>();
   if (!tarball) {
@@ -1699,15 +1746,20 @@ function verifiedNpmBundlePackages(
   const npmVersion = typeof npm?.version === "string" ? npm.version : undefined;
   const policy = npmVersion ? NPM_BUNDLED_DEPENDENCY_POLICIES.get(npmVersion) : undefined;
   const integrity = `sha512-${createHash("sha512").update(tarball).digest("base64")}`;
+  const localNpm = localPackageArtifacts.find(({ name }) => name === "npm");
+  const artifactMatches = localNpm
+    ? localNpm.version === npmVersion &&
+      localNpm.integrity === integrity &&
+      npm?.resolved === localNpm.spec.replace(/^file:\.\//u, "file:")
+    : policy && pnpmIntegrities.get(`npm@${npmVersion}`)?.has(integrity);
   if (
-    !policy ||
+    !artifactMatches ||
     !npm ||
     (npm.name !== undefined && npm.name !== "npm") ||
-    npm.integrity !== integrity ||
-    !pnpmIntegrities.get(`npm@${npmVersion}`)?.has(integrity)
+    npm.integrity !== integrity
   ) {
     throw new Error(
-      `npm bundled dependency tarball does not match the pnpm-locked npm@${npmVersion ?? "unknown"} integrity`,
+      `npm bundled dependency tarball does not match the ${localNpm ? "local artifact" : "pnpm-locked"} npm@${npmVersion ?? "unknown"} integrity`,
     );
   }
   let parseError: Error | undefined;
@@ -1747,11 +1799,31 @@ function verifiedNpmBundlePackages(
   if (root?.name !== "npm" || root.version !== npmVersion) {
     throw new Error("npm bundled dependency tarball has an unexpected package identity");
   }
-  return new Map(
+  const bundled = new Map(
     [...manifests]
       .filter(([relative]) => relative)
       .map(([relative, manifest]) => [`node_modules/npm/${relative}`, manifest]),
   );
+  if (localNpm) {
+    // A local patched archive is the source of truth for these exact occurrences,
+    // not an exemption for arbitrary nested npm packages or registry copies.
+    for (const lockPath of bundled.keys()) {
+      if (!isApprovedNpmBundledDependency(packages, lockPath, bundled)) {
+        throw new Error(`npm lock differs from local bundled package: ${lockPath}`);
+      }
+    }
+    for (const [lockPath, metadata] of Object.entries(packages)) {
+      if (
+        lockPath.startsWith("node_modules/npm/node_modules/") &&
+        isRecord(metadata) &&
+        metadata.inBundle === true &&
+        !bundled.has(lockPath)
+      ) {
+        throw new Error(`npm lock has an unexpected local bundled package: ${lockPath}`);
+      }
+    }
+  }
+  return bundled;
 }
 
 function collectPnpmLockViolations(
@@ -1769,6 +1841,7 @@ function collectPnpmLockViolations(
     packages,
     npmBundleTarball,
     pnpmLockIntegrities,
+    localPackageArtifacts,
   );
   const violations: Array<{
     actualIntegrity?: string;

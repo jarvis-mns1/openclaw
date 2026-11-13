@@ -22,13 +22,11 @@ import {
   withRuntimeToolSchemaQuarantine,
   type RuntimeToolSchemaQuarantineRecorder,
 } from "../../tool-schema-quarantine.js";
-import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
 import {
-  TOOL_CALL_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_RAW_TOOL_NAME,
-  type ToolSearchCatalogToolExecutor,
-} from "../../tool-search.js";
+  TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
+  TOOL_SEARCH_CONTROL_TOOL_NAMES,
+} from "../../tool-search-types.js";
+import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
@@ -161,7 +159,7 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       controlNames: codeModeControlsEnabledForRun
         ? [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME]
         : toolSearchConfig.mode === "directory"
-          ? [TOOL_SEARCH_RAW_TOOL_NAME, TOOL_DESCRIBE_RAW_TOOL_NAME, TOOL_CALL_RAW_TOOL_NAME]
+          ? [...TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES]
           : undefined,
       explicitAllowlistSources: explicitToolAllowlistSources,
     });

@@ -79,7 +79,13 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       codeMode: false,
       preferred: false,
       search: true,
-      expected: ["tool_search", "tool_describe", "dispatch_action", "fixture_direct"],
+      expected: [
+        "tool_search",
+        "tool_describe",
+        "dispatch_action",
+        "tool_search_batch",
+        "fixture_direct",
+      ],
     },
   ] as const)(
     "preserves the local $mode projection after transporting prepared facts",
@@ -138,6 +144,19 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           );
         }
         if (search) {
+          const batch = expectDefined(
+            workerSurface.tools.find((tool) => tool.name === "tool_search_batch"),
+            "prepared batch search control",
+          );
+          expect(
+            (
+              await batch.execute("prepared-search", {
+                queries: [{ query: "fixture_read", limit: 1 }],
+              })
+            ).details,
+          ).toMatchObject({
+            results: [{ query: "fixture_read", candidates: [{ name: "fixture_read" }] }],
+          });
           const call = expectDefined(
             workerSurface.tools.find((tool) => tool.name === "dispatch_action"),
             "prepared catalog call control",
@@ -173,6 +192,10 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           ...tools(["fixture_allowed", "fixture_denied"]),
         ]);
         const full = surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
+        expect(surface.tools.some((tool) => tool.name === "tool_search_batch")).toBe(true);
+        expect(
+          runtime.toolSearchCatalogRef?.current?.entries.map((entry) => entry.name),
+        ).not.toContain("tool_search_batch");
         expect(full).toContain("fixture_denied");
         expect(surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt).toBe(full);
         const restricted = surface.promptToolPolicy.apply({ toolsAllow: ["fixture_allowed"] });
@@ -304,6 +327,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           "tool_search",
           "tool_describe",
           "dispatch_action",
+          "tool_search_batch",
           "read",
           "message",
         ]);

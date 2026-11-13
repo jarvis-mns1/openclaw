@@ -49,7 +49,7 @@ import { SessionManager } from "./sessions/session-manager.js";
 import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import { addClientToolsToToolCatalog, restrictToolSearchCatalog } from "./tool-search-catalog.js";
-import { clearToolSearchCatalog } from "./tool-search.js";
+import { clearToolSearchCatalog, createToolSearchTools } from "./tool-search.js";
 import { createToolSurfacePresentationForTest } from "./tool-surface-plan.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
@@ -83,6 +83,15 @@ function catalog(targets: AnyAgentTool[], directToolNames?: string[]) {
 }
 
 describe("Code Mode catalog and model-visible surface", () => {
+  it("keeps scalar and batch search controls out of the visible and guest surfaces", () => {
+    const { tools, catalogRef } = catalog([
+      ...createToolSearchTools({}),
+      fakeTool("lookup", "Look up a record"),
+    ]);
+    expect(tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["lookup"]);
+  });
+
   it("reuses control validators across turns while retaining each turn's limits and cancellation", async () => {
     const compile = vi.mocked(Compile);
     const validate = (tools: AnyAgentTool[]) => {

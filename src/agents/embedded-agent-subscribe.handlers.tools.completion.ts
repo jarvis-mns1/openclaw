@@ -5,7 +5,6 @@ import {
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { projectAgentToolActivity } from "../infra/agent-activity-events.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { projectProgressCardChannelUpdate } from "../session-cards/progress-card-channel-summary.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
@@ -64,6 +63,7 @@ import {
   buildToolCallSummary,
   buildToolStartKey,
   emitAgentEventCallbackBestEffort,
+  emitToolHandlerAgentEvent,
   emitToolActivityEvent,
   emitTrackedItemEvent,
   isExecToolName,
@@ -427,7 +427,7 @@ export async function handleToolExecutionEnd(
         ...planUpdate,
       },
     };
-    emitAgentEvent({ runId: ctx.params.runId, ...planEvent });
+    emitToolHandlerAgentEvent(ctx, planEvent);
     emitAgentEventCallbackBestEffort(ctx, planEvent);
   }
 
@@ -461,8 +461,7 @@ export async function handleToolExecutionEnd(
     ...(toolErrorSummary ? { toolErrorSummary } : {}),
     ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
   });
-  emitAgentEvent({
-    runId: ctx.params.runId,
+  emitToolHandlerAgentEvent(ctx, {
     stream: "tool",
     data: {
       ...createResultData(),

@@ -98,9 +98,19 @@ export async function preparePackageManifest(cwd = process.cwd()) {
   if (bundles === true || (Array.isArray(bundles) && bundles.length > 0)) {
     const { collectNpmPlatformOptionalDependencies, generateNpmPackageLock } =
       await import("./generate-npm-package-lock.mts");
-    platformOptionals = collectNpmPlatformOptionalDependencies(
-      JSON.parse(generateNpmPackageLock(cwd)),
+    const { collectWorkspacePatchedDependencies, packPatchedDependencies } =
+      await import("./lib/package-patched-dependencies.mts");
+    const patched = packPatchedDependencies(
+      cwd,
+      collectWorkspacePatchedDependencies(cwd, cwd, packageJson),
     );
+    try {
+      platformOptionals = collectNpmPlatformOptionalDependencies(
+        JSON.parse(generateNpmPackageLock(cwd, { localPackageArtifacts: patched.artifacts })),
+      );
+    } finally {
+      patched.cleanup();
+    }
   }
   const prepared = preparedPackageManifest(original, platformOptionals);
   if (prepared === original) {

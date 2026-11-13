@@ -737,6 +737,70 @@ export async function prepareBundledAiRuntimePackage(
   }
 }
 
+export async function prepareBundledNpmRuntimePackage(
+  sourceDir: string,
+  onCleanupFailure?: (error: unknown) => void,
+) {
+  const npmPath = path.join(sourceDir, "node_modules", "npm");
+  const unchanged = async () => {};
+  let installed;
+  try {
+    installed = await fs.lstat(npmPath);
+  } catch (error) {
+    if (hasErrorCode(error, "ENOENT")) {
+      return unchanged;
+    }
+    throw error;
+  }
+  if (!installed.isSymbolicLink()) {
+    return unchanged;
+  }
+  const manifest: unknown = JSON.parse(
+    await fs.readFile(path.join(sourceDir, "package.json"), "utf8"),
+  );
+  const bundles = isRecord(manifest)
+    ? (manifest.bundleDependencies ?? manifest.bundledDependencies)
+    : undefined;
+  if (bundles !== true && (!Array.isArray(bundles) || !bundles.includes("npm"))) {
+    return unchanged;
+  }
+
+  const stage = await fs.mkdtemp(path.join(sourceDir, "node_modules", ".openclaw-npm-package-"));
+  const prepared = path.join(stage, "prepared");
+  const original = path.join(stage, "original");
+  let originalMoved = false;
+  let stagedInstalled = false;
+  const cleanup = async () => {
+    if (stagedInstalled) {
+      await fs.rm(npmPath, { recursive: true, force: true });
+      stagedInstalled = false;
+    }
+    if (originalMoved) {
+      await fs.rename(original, npmPath);
+      originalMoved = false;
+    }
+    await fs.rm(stage, { recursive: true, force: true });
+  };
+  try {
+    // Packers relocate nested dependencies when this self-contained bundle is a
+    // pnpm-store link. Materialize its existing bytes, never resolve a new tree.
+    await fs.cp(await fs.realpath(npmPath), prepared, { recursive: true, dereference: true });
+    await fs.rename(npmPath, original);
+    originalMoved = true;
+    await fs.rename(prepared, npmPath);
+    stagedInstalled = true;
+    return cleanup;
+  } catch (error) {
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      onCleanupFailure?.(cleanupError);
+      throw packagePreparationRestoreError(error, cleanupError);
+    }
+    throw error;
+  }
+}
+
 async function normalizeOpenClawTarballModes(tarballPath: string) {
   // npm can retain restrictive source read bits. Normalize those for non-root
   // installers while preserving the archive's executable intent. pnpm derives
@@ -927,6 +991,7 @@ export async function packOpenClawPackageForDocker(
   let packReceiptDir: string | undefined;
   try {
     let cleanupBundledAiRuntime = async () => {};
+    let cleanupBundledNpmRuntime = async () => {};
     let cleanupBundledPlugins = async () => {};
     const cleanupFailures = new Set<unknown>();
     const onCleanupFailure = (error: unknown) => void cleanupFailures.add(error);
@@ -949,6 +1014,10 @@ export async function packOpenClawPackageForDocker(
           restoreManifest,
           onCleanupFailure,
         },
+      );
+      cleanupBundledNpmRuntime = await prepareBundledNpmRuntimePackage(
+        sourcePath,
+        onCleanupFailure,
       );
       // AI staging materializes the bundled tree; pack must not inherit the
       // source workspace's isolated linker setting for that prepared bundle.
@@ -974,7 +1043,11 @@ export async function packOpenClawPackageForDocker(
     } finally {
       // Restore shared manifests in reverse preparation order. A helper can
       // fail restoring during preparation, before its cleanup handle returns.
-      for (const cleanup of [cleanupBundledAiRuntime, cleanupBundledPlugins]) {
+      for (const cleanup of [
+        cleanupBundledNpmRuntime,
+        cleanupBundledAiRuntime,
+        cleanupBundledPlugins,
+      ]) {
         try {
           await cleanup();
         } catch (error) {

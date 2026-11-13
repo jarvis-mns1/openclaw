@@ -7,7 +7,6 @@ import {
   MAX_TOOL_SEARCH_RESULTS,
   type ToolSearchCatalogSession,
   type ToolSearchConfig,
-  type ToolSearchRequest,
 } from "./tool-search-types.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
@@ -114,18 +113,30 @@ export function readToolSearchLimit(value: unknown, config: ToolSearchConfig): n
   return Math.min(value, config.maxSearchLimit);
 }
 
-function readToolSearchArgs(
-  params: Record<string, unknown>,
+export function readToolSearchRequest(
+  args: unknown,
   config: ToolSearchConfig,
 ): { query: string; limit: number } {
+  const params = asToolParamsRecord(args);
+  // Some providers strip object closure. Never silently discard a second search.
+  if (params.queries != null && !(Array.isArray(params.queries) && params.queries.length === 0)) {
+    throw new ToolInputError(
+      "tool_search accepts one query. Use tool_search_batch with queries for multiple searches.",
+    );
+  }
   const query = params.query;
   if (typeof query !== "string") {
     throw new ToolInputError("query must be a string.");
   }
-  const options = isRecord(params.options) ? params.options : undefined;
+  if (
+    params.options != null &&
+    (!isRecord(params.options) || Object.keys(params.options).length > 0)
+  ) {
+    throw new ToolInputError("set limit directly on tool_search, not inside options.");
+  }
   return {
     query,
-    limit: readToolSearchLimit(params.limit ?? options?.limit, config),
+    limit: readToolSearchLimit(params.limit, config),
   };
 }
 
@@ -138,6 +149,12 @@ function readBatchToolSearchEntry(
 ): BatchToolSearchEntry {
   if (!isRecord(value)) {
     throw new ToolInputError(`queries[${index}] must be an object.`);
+  }
+  if (
+    value.options != null &&
+    (!isRecord(value.options) || Object.keys(value.options).length > 0)
+  ) {
+    throw new ToolInputError(`set queries[${index}].limit directly, not inside options.`);
   }
   const rawQuery = value.query;
   const query = typeof rawQuery === "string" ? rawQuery.trim() : "";
@@ -159,15 +176,34 @@ function readBatchToolSearchEntry(
   }
 }
 
-function readBatchToolSearchRequest(
-  searches: BatchToolSearchEntry[],
+export function readToolSearchBatchRequest(
+  args: unknown,
   config: ToolSearchConfig,
-): ToolSearchRequest {
-  if (searches.length > MAX_TOOL_SEARCH_BATCH_QUERIES) {
+): BatchToolSearchEntry[] {
+  const params = asToolParamsRecord(args);
+  if (params.query != null && !(typeof params.query === "string" && !params.query.trim())) {
+    throw new ToolInputError(
+      "tool_search_batch accepts queries only. Put every search in queries, or use tool_search for one query.",
+    );
+  }
+  if (
+    params.limit != null ||
+    (params.options != null &&
+      (!isRecord(params.options) || Object.keys(params.options).length > 0))
+  ) {
+    throw new ToolInputError("set limit on each batch query, not on the batch request.");
+  }
+  if (!Array.isArray(params.queries) || params.queries.length === 0) {
+    throw new ToolInputError("queries must be a non-empty array.");
+  }
+  if (params.queries.length > MAX_TOOL_SEARCH_BATCH_QUERIES) {
     throw new ToolInputError(
       `queries may contain at most ${MAX_TOOL_SEARCH_BATCH_QUERIES} entries.`,
     );
   }
+  const searches = params.queries.map((value, index) =>
+    readBatchToolSearchEntry(value, index, config),
+  );
   const requestedResults = searches.reduce((total, search) => total + search.limit, 0);
   if (requestedResults > MAX_TOOL_SEARCH_RESULTS) {
     throw new ToolInputError(
@@ -181,43 +217,5 @@ function readBatchToolSearchRequest(
       `serialized batch query text may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes.`,
     );
   }
-  return { kind: "batch", searches };
-}
-
-/** Normalize scalar and batch shapes without dropping independent searches. */
-export function readToolSearchRequest(args: unknown, config: ToolSearchConfig): ToolSearchRequest {
-  const params = asToolParamsRecord(args);
-  const query = params.query ?? undefined;
-  const queries = params.queries ?? undefined;
-  const hasQuery = query !== undefined;
-  const hasQueries = queries !== undefined;
-  if (!hasQuery && !hasQueries) {
-    throw new ToolInputError("provide query or queries.");
-  }
-  if (hasQueries && !Array.isArray(queries)) {
-    throw new ToolInputError("queries must be a non-empty array.");
-  }
-  const batchEntries = Array.isArray(queries) ? queries : [];
-  if (hasQuery && typeof query !== "string") {
-    throw new ToolInputError("query must be a string.");
-  }
-  const singleQuery = typeof query === "string" && query.trim() ? query : undefined;
-  if (batchEntries.length === 0) {
-    if (singleQuery === undefined && hasQueries) {
-      throw new ToolInputError("queries must be a non-empty array.");
-    }
-    return { kind: "single", search: readToolSearchArgs(params, config) };
-  }
-  if (singleQuery === undefined && (params.limit != null || params.options !== undefined)) {
-    throw new ToolInputError("set limit on each batch query, not on the batch request.");
-  }
-  const searches = batchEntries.map((value, index) =>
-    readBatchToolSearchEntry(value, index, config),
-  );
-  if (singleQuery !== undefined) {
-    // Even identical text is an independent search with its own limit and budget.
-    const single = readToolSearchArgs(params, config);
-    searches.unshift({ query: single.query.trim(), limit: single.limit });
-  }
-  return readBatchToolSearchRequest(searches, config);
+  return searches;
 }

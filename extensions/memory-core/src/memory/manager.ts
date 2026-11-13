@@ -17,7 +17,7 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { openOpenClawAgentSqliteWorkerStoreV2 } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
-import { getMemoryManagerLifecycle, markMemoryIndexingLive } from "./lifecycle.js";
+import { getMemoryManagerLifecycle } from "./lifecycle.js";
 import { runMemoryStatus } from "./manager-cpu-worker-runtime.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
@@ -293,7 +293,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     }
     this.batch = this.resolveBatchConfig();
     if (!transient) {
-      markMemoryIndexingLive();
       this.runInBackgroundContext(() => {
         this.ensureWatcher();
         this.ensureSessionListener();
@@ -354,34 +353,33 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     },
   ): Promise<void> {
     if (this.syncing) {
-      if (hasTargetedSessionSyncParams(params)) {
-        if (options?.queuedSessionOwner) {
-          // Another caller claimed the sync slot after this queue owner was
-          // created. Wait for it, then retry admission instead of enqueueing
-          // into the promise that is already awaiting this call.
-          await this.syncing.catch(() => undefined);
-          if (this.closing || this.closed) {
-            return;
-          }
-          return await this.syncAdmitted(params, options);
+      if (options?.queuedSessionOwner || params?.reason === "session-reconcile") {
+        // An admitted older pass cannot satisfy queued targets or a replacement
+        // corpus discovered after that pass began. Re-enter after its owner settles.
+        await this.syncing.catch(() => undefined);
+        if (this.closing || this.closed) {
+          return;
         }
+        return await this.syncAdmitted(params, options);
+      }
+      if (hasTargetedSessionSyncParams(params)) {
         return this.sessionSyncQueue.enqueue(params);
       }
+      const joinedWatchGeneration = this.syncingMemoryWatchGeneration;
+      const needsWatchFollowUp = () =>
+        params?.reason === "watch" &&
+        this.dirty &&
+        !this.closing &&
+        !this.closed &&
+        this.memoryWatchGeneration > joinedWatchGeneration;
       try {
         await this.syncing;
-        // Watch events accepted after source planning belong to the next pass.
-        // Joining the old promise alone would strand them until another search.
-        if (
-          params?.reason === "watch" &&
-          this.dirty &&
-          !this.closing &&
-          !this.closed &&
-          this.memoryWatchGeneration > this.syncingMemoryWatchGeneration
-        ) {
-          return await this.syncAdmitted(params, options);
-        }
-        return;
       } catch (err) {
+        if (needsWatchFollowUp()) {
+          // New notifications still need a pass when the joined generation failed.
+          await this.syncAdmitted(params, options);
+          throw err;
+        }
         if (
           options?.allowEmbeddingBootstrapFallback &&
           this.providerRequirement.mode === "optional" &&
@@ -394,10 +392,17 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         }
         throw err;
       }
+      if (needsWatchFollowUp()) {
+        return await this.syncAdmitted(params, options);
+      }
+      return;
     }
     // An intentional no-progress pass may remain dirty. Only newly accepted
     // watch facts can admit another pass; joined callers cannot spin on dirty.
-    this.syncingMemoryWatchGeneration = this.memoryWatchGeneration;
+    if (!hasTargetedSessionSyncParams(params)) {
+      // Targeted session work cannot consume accepted memory-file notifications.
+      this.syncingMemoryWatchGeneration = this.memoryWatchGeneration;
+    }
     const run = async () => {
       let outcome: MemorySyncOutcome;
       await this.publishedDatabase.withPublicationGeneration(async () => {

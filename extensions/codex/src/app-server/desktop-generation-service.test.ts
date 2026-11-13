@@ -1,24 +1,26 @@
-import { EventEmitter } from "node:events";
-import type { FSWatcher } from "node:fs";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { WatchOptions, WatchSubscription } from "openclaw/plugin-sdk/file-access-runtime";
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { codexBuildSymbol } from "../build-state.js";
 import {
   createCodexDesktopGenerationService,
   waitForCodexDesktopGeneration,
 } from "./desktop-generation.js";
 
-class FakeWatcher extends EventEmitter {
-  close = vi.fn();
-  ref = vi.fn(() => this);
-  unref = vi.fn(() => this);
+class FakeWatcher implements WatchSubscription {
+  ready = Promise.resolve();
+  close = vi.fn(async () => {});
+  setScopes = vi.fn(async () => {});
+  reconcile = vi.fn(async () => {});
+  health = vi.fn(() => ({ state: "ready" as const, mode: "events" as const, directories: 1 }));
+  [Symbol.asyncDispose] = () => this.close();
 }
 
 type WatchRegistration = {
   watchedPath: string;
-  recursive: boolean;
-  listener: (eventType: string, filename: string | Buffer | null) => void;
+  options: WatchOptions;
   watcher: FakeWatcher;
 };
 
@@ -46,6 +48,17 @@ function createHarness(initialFingerprint: string, initialWatchFailures = 0) {
   const warn = vi.fn();
   let watchAttempts = 0;
   const context = createServiceContext(warn, { clearFailure, reportFailure });
+  const watchPath = vi.fn(async (watchedPath: string, options: WatchOptions) => {
+    watchAttempts += 1;
+    if (watchFailures > 0) {
+      watchFailures -= 1;
+      throw new Error("watch registration unavailable");
+    }
+    const watcher = new FakeWatcher();
+    watcher.ready = Promise.resolve().then(() => options.onInvalidate({ reason: "reconcile" }));
+    registrations.push({ watchedPath, options, watcher });
+    return watcher;
+  });
   const service = createCodexDesktopGenerationService(
     { onGenerationChange },
     {
@@ -53,22 +66,14 @@ function createHarness(initialFingerprint: string, initialWatchFailures = 0) {
       readFingerprint,
       resolveWatchPaths: () => ["/Applications", "/Applications/ChatGPT.app"],
       pathExists: () => true,
-      watchPath: (watchedPath, options, listener) => {
-        watchAttempts += 1;
-        if (watchFailures > 0) {
-          watchFailures -= 1;
-          throw new Error("watch registration unavailable");
-        }
-        const watcher = new FakeWatcher();
-        registrations.push({ watchedPath, recursive: options.recursive, listener, watcher });
-        return watcher as FSWatcher;
-      },
+      watchPath,
     },
   );
   return {
     service,
     context,
     registrations,
+    watchPath,
     readFingerprint,
     onGenerationChange,
     clearFailure,
@@ -102,6 +107,8 @@ describe("Codex desktop generation service", () => {
       await current.service.stop?.(current.context);
     }
     current = undefined;
+    // Each case owns a fresh lifetime, including terminal retirement failures.
+    Reflect.deleteProperty(globalThis, codexBuildSymbol("openclaw.codexDesktopGenerationState"));
     vi.useRealTimers();
   });
 
@@ -140,7 +147,7 @@ describe("Codex desktop generation service", () => {
     expect(applications).toBeDefined();
 
     harness.setFingerprint("desktop-y");
-    applications?.listener("rename", "ChatGPT.app");
+    applications?.options.onInvalidate({ reason: "event" });
     await vi.advanceTimersByTimeAsync(100);
     expect(oldArm.every((entry) => entry.watcher.close.mock.calls.length === 1)).toBe(true);
     expect(harness.registrations).toHaveLength(4);
@@ -150,9 +157,14 @@ describe("Codex desktop generation service", () => {
       epoch: expect.any(Number),
       fingerprint: "desktop-y",
     });
+    applications?.options.onInvalidate({ reason: "event" });
+    oldArm[0]?.options.onHealth?.({ state: "unavailable", mode: "events", directories: 0 });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(harness.registrations).toHaveLength(4);
+    expect(harness.reportFailure).not.toHaveBeenCalled();
   });
 
-  it("ignores unrelated application events and recovers a watcher error", async () => {
+  it("scopes observation to desktop candidates and recovers a watcher error", async () => {
     vi.useFakeTimers();
     const harness = createHarness("desktop-errors");
     current = harness;
@@ -160,11 +172,20 @@ describe("Codex desktop generation service", () => {
     const oldArm = [...harness.registrations];
     const applications = oldArm.find((entry) => entry.watchedPath === "/Applications");
 
-    applications?.listener("rename", "Safari.app");
+    expect(applications?.options.scopes).toEqual([
+      { path: "ChatGPT.app", kind: "entry" },
+      { path: "Codex.app", kind: "entry" },
+    ]);
+    expect(oldArm[1]?.options.scopes).toEqual([{ path: ".", kind: "tree", depth: 128 }]);
     await vi.advanceTimersByTimeAsync(100);
     expect(harness.registrations).toHaveLength(2);
 
-    oldArm[0]?.watcher.emit("error", new Error("watch lost"));
+    oldArm[0]?.options.onHealth?.({
+      state: "unavailable",
+      mode: "events",
+      directories: 0,
+      failure: { operation: "watch", error: new Error("watch lost") },
+    });
     expect(harness.reportFailure).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(100);
     expect(harness.registrations).toHaveLength(4);
@@ -200,14 +221,19 @@ describe("Codex desktop generation service", () => {
       const registration = harness.registrations[0]!;
       expect(() => {
         if (event === "change") {
-          registration.listener("rename", "ChatGPT.app");
+          registration.options.onInvalidate({ reason: "event" });
         } else {
-          registration.watcher.emit("error", new Error("watch lost during shutdown"));
+          registration.options.onHealth?.({
+            state: "unavailable",
+            mode: "events",
+            directories: 0,
+          });
         }
       }).not.toThrow();
       await vi.advanceTimersByTimeAsync(1_000);
       expect(harness.watchAttempts).toBe(2);
       expect(harness.readFingerprint).toHaveBeenCalledOnce();
+      expect(harness.reportFailure).not.toHaveBeenCalled();
     },
   );
 
@@ -240,5 +266,142 @@ describe("Codex desktop generation service", () => {
     expect(harness.readFingerprint).toHaveBeenCalledOnce();
     expect(harness.onGenerationChange).not.toHaveBeenCalled();
     expect(harness.warn).not.toHaveBeenCalled();
+  });
+
+  it.each(["stop", "rearm"])(
+    "joins every watcher retirement started by %s before service stop completes",
+    async (trigger) => {
+      vi.useFakeTimers();
+      const harness = createHarness("desktop-watch-retirement");
+      current = harness;
+      await startAndSettle(harness);
+      const closed = createDeferred<void>();
+      harness.registrations[0]!.watcher.close.mockImplementation(() => closed.promise);
+      if (trigger === "rearm") {
+        harness.registrations[0]!.options.onInvalidate({ reason: "event" });
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      const retired = vi.fn();
+      const stopping = Promise.resolve(harness.service.stop?.(harness.context)).then(retired);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(retired).not.toHaveBeenCalled();
+        expect(
+          harness.registrations.every(({ watcher }) => watcher.close.mock.calls.length === 1),
+        ).toBe(true);
+      } finally {
+        closed.resolve();
+        await stopping;
+      }
+      current = undefined;
+      expect(retired).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(harness.registrations).toHaveLength(2);
+      expect(harness.onGenerationChange).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retires a watcher admitted after stop without publishing or rearming", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness("desktop-late-admission");
+    const admitted = createDeferred<FakeWatcher>();
+    const closed = createDeferred<void>();
+    const watcher = new FakeWatcher();
+    watcher.close.mockImplementation(() => closed.promise);
+    harness.watchPath.mockImplementationOnce(() => admitted.promise);
+    current = harness;
+    const starting = Promise.resolve(harness.service.start(harness.context));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.watchPath).toHaveBeenCalledOnce();
+    const retired = vi.fn();
+    const stopping = Promise.resolve(harness.service.stop?.(harness.context)).then(retired);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(retired).not.toHaveBeenCalled();
+      admitted.resolve(watcher);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(watcher.close).toHaveBeenCalledOnce();
+      expect(retired).not.toHaveBeenCalled();
+      harness.watchPath.mock.calls[0]?.[1].onInvalidate({ reason: "event" });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(harness.watchPath).toHaveBeenCalledOnce();
+      expect(harness.readFingerprint).not.toHaveBeenCalled();
+      expect(harness.onGenerationChange).not.toHaveBeenCalled();
+    } finally {
+      admitted.resolve(watcher);
+      closed.resolve();
+      await Promise.all([starting, stopping]);
+    }
+    current = undefined;
+    expect(retired).toHaveBeenCalledOnce();
+  });
+
+  it("closes an admitted watcher while readiness is pending", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness("desktop-pending-ready");
+    const ready = createDeferred<void>();
+    const watcher = new FakeWatcher();
+    watcher.ready = ready.promise;
+    watcher.close.mockImplementation(async () => ready.reject(new Error("watch closed")));
+    harness.watchPath.mockResolvedValueOnce(watcher);
+    current = harness;
+    const starting = Promise.resolve(harness.service.start(harness.context));
+    await vi.advanceTimersByTimeAsync(0);
+    await harness.service.stop?.(harness.context);
+    await starting;
+    current = undefined;
+    expect(watcher.close).toHaveBeenCalledOnce();
+    expect(harness.watchPath).toHaveBeenCalledOnce();
+    expect(harness.readFingerprint).not.toHaveBeenCalled();
+    expect(harness.reportFailure).not.toHaveBeenCalled();
+  });
+
+  it("joins sibling retirements and fingerprint reads before reporting a close failure", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness("desktop-close-failure");
+    const read = createDeferred<string>();
+    harness.readFingerprint.mockImplementationOnce(() => read.promise);
+    current = harness;
+    await startAndSettle(harness);
+    const closed = createDeferred<void>();
+    harness.registrations[0]!.watcher.close.mockRejectedValue(new Error("close failed"));
+    harness.registrations[1]!.watcher.close.mockImplementation(() => closed.promise);
+    const rejected = vi.fn();
+    const stopping = Promise.resolve(harness.service.stop?.(harness.context)).catch(rejected);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(rejected).not.toHaveBeenCalled();
+      closed.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(rejected).not.toHaveBeenCalled();
+    } finally {
+      closed.resolve();
+      read.resolve("desktop-after-stop");
+      await stopping;
+    }
+    current = undefined;
+    expect(rejected).toHaveBeenCalledWith(expect.any(AggregateError));
+    expect(harness.onGenerationChange).not.toHaveBeenCalled();
+  });
+
+  it("reports and retains a failed rearm retirement without admitting replacements", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness("desktop-rearm-close-failure");
+    current = harness;
+    await startAndSettle(harness);
+    harness.registrations[0]!.watcher.close.mockRejectedValue(new Error("rearm close failed"));
+    harness.registrations[0]!.options.onInvalidate({ reason: "event" });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(harness.reportFailure).toHaveBeenCalledWith(expect.any(AggregateError));
+    expect(harness.registrations).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(harness.registrations).toHaveLength(2);
+    await expect(harness.service.stop?.(harness.context)).rejects.toThrow(
+      "Codex desktop generation retirement failed",
+    );
+    current = undefined;
+    await expect(harness.service.start(harness.context)).rejects.toThrow(
+      "Codex desktop generation retirement failed",
+    );
   });
 });
