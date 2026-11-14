@@ -13,6 +13,7 @@ import {
   ensureDir,
   isMemoryPath,
   listMemoryFiles,
+  matchesExtraMemoryPathEntry,
   normalizeExtraMemoryPathEntries,
   normalizeExtraMemoryPaths,
   remapChunkLines,
@@ -384,6 +385,41 @@ describe("memory host SDK package internals", () => {
       label: "brace alternatives containing separators and extglobs",
       patterns: ["{notes,archive/deep}/**/*.md", "@(logs.cache|scratch)/**/*.md"],
       expectedFiles: undefined,
+      expectedDirectories: [
+        "",
+        "notes",
+        "notes/team",
+        "notes/team/deeper",
+        "archive",
+        "archive/deep",
+        "logs.cache",
+        "logs.cache/deep",
+        "scratch",
+        "scratch/deep",
+      ],
+    },
+    {
+      label: "bounded brace alternatives",
+      patterns: ["{*.md,notes/team/*.md,archive/deep/*.md}"],
+      expectedFiles: ["root.md", "notes/team/keep.md", "archive/deep/keep.md"],
+      expectedDirectories: ["", "notes", "notes/team", "archive", "archive/deep"],
+    },
+    {
+      label: "positive extglob directories",
+      patterns: ["@(notes|archive)/*/*.md"],
+      expectedFiles: ["notes/team/keep.md", "archive/deep/keep.md"],
+      expectedDirectories: ["", "notes", "notes/team", "archive", "archive/deep"],
+    },
+    {
+      label: "character-class directories",
+      patterns: ["[na]*/[dt]*/*.md"],
+      expectedFiles: ["notes/team/keep.md", "archive/deep/keep.md"],
+      expectedDirectories: ["", "notes", "notes/team", "archive", "archive/deep"],
+    },
+    {
+      label: "nested negative extglobs with runtime-specific leaf semantics",
+      patterns: ["!(archive|@(notes|scratch))/**/*.md"],
+      expectedFiles: undefined,
       expectedDirectories: undefined,
     },
     {
@@ -462,6 +498,13 @@ describe("memory host SDK package internals", () => {
       }
     },
   );
+
+  it("retains globstar ancestors whose names also match the terminal file pattern", () => {
+    const entry = { path: getTmpDir(), pattern: "notes/**/*.md" };
+    const directory = path.join(entry.path, "notes", "archive.md");
+    expect(matchesExtraMemoryPathEntry(entry, path.join(directory, "keep.md"))).toBe(true);
+    expect(matchesExtraMemoryPathEntry(entry, directory, { directory: true })).toBe(true);
+  });
 
   it.skipIf(process.platform === "win32")(
     "skips a symlinked workspace root file instead of aborting enumeration",

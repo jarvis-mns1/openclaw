@@ -24,6 +24,7 @@ import {
   type MemoryMultimodalSettings,
 } from "./multimodal.js";
 import {
+  matchesMemoryGlobDirectory,
   resolveCanonicalRootMemoryFile,
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime-paths.js";
@@ -142,21 +143,7 @@ export function matchesExtraMemoryPathEntry(
     if (!options?.directory) {
       return path.posix.matchesGlob(normalizedRelativePath, entry.pattern);
     }
-    const segments = entry.pattern.split("/");
-    // Keep complex patterns conservative; the leaf matcher owns their semantics.
-    if (
-      /[{[(]/.test(entry.pattern) ||
-      segments.some((segment) => segment === "." || segment === "..")
-    ) {
-      return true;
-    }
-    const parentCount = segments.at(-1) === "**" ? segments.length : segments.length - 1;
-    for (let length = 1; length <= parentCount; length += 1) {
-      if (path.posix.matchesGlob(normalizedRelativePath, segments.slice(0, length).join("/"))) {
-        return true;
-      }
-    }
-    return false;
+    return matchesMemoryGlobDirectory(normalizedRelativePath, entry.pattern);
   } catch {
     return false;
   }

@@ -8,6 +8,7 @@ export {
   tryResolveLegacyDataOwner,
   tryResolveRawLegacyDefaultAgentId,
 } from "../../../../src/agents/agent-roster.js";
+export { matchesMemoryGlobDirectory } from "../../../../src/memory/glob-prefix.js";
 export {
   resolveCanonicalRootMemoryFile,
   shouldSkipRootMemoryAuxiliaryPath,

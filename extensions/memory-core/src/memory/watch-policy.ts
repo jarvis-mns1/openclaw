@@ -174,7 +174,17 @@ export class MemoryWatchPolicy {
         }
         const relative = path.relative(selected, absolute);
         const lexical = path.join(selection.lexical, relative);
-        if (!this.ignored(relative, lexical, entry.kind)) {
+        if (
+          !this.ignored(relative, lexical, entry.kind) &&
+          (selection.core ||
+            this.extras.some(
+              (extra) =>
+                isPathInside(extra.path, lexical) &&
+                matchesExtraMemoryPathEntry(extra, lexical, {
+                  directory: entry.kind === "directory",
+                }),
+            ))
+        ) {
           return false;
         }
       } else if (isPathInside(absolute, selected)) {
