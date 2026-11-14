@@ -69,6 +69,44 @@ async function fixture() {
 }
 
 describe("Git backup artifact ownership", () => {
+  it("retires committed tables omitted by an already staged replacement manifest", async () => {
+    const { root, repositoryPath, stateDir, global, agent } = await fixture();
+    await createGitBackup({ repositoryPath, stateDir, databases: [global, agent] });
+    const retired = "global/tables/device_auth_tokens.jsonl";
+    expect(await requireGit(repositoryPath, ["ls-tree", "--name-only", "HEAD", retired])).toBe(
+      retired,
+    );
+
+    const replacement = path.join(root, "replacement");
+    await createGitBackup({
+      repositoryPath: replacement,
+      stateDir,
+      databases: [global],
+      excludeSecrets: true,
+    });
+    await fs.cp(path.join(replacement, "global"), path.join(repositoryPath, "global"), {
+      recursive: true,
+    });
+    await fs.rm(path.join(repositoryPath, retired));
+    await requireGit(repositoryPath, ["add", "--", "global"]);
+    const extra = "global/operator-notes.txt";
+    await fs.writeFile(path.join(repositoryPath, extra), "preserve staged note\n");
+    await requireGit(repositoryPath, ["add", "--", extra]);
+    const stagedBlob = await requireGit(repositoryPath, ["rev-parse", `:${extra}`]);
+
+    const result = await createGitBackup({
+      repositoryPath,
+      stateDir,
+      databases: [global, agent],
+      excludeSecrets: true,
+    });
+    expect(result.noChanges).toBe(false);
+    expect(await requireGit(repositoryPath, ["ls-tree", "--name-only", "HEAD", retired])).toBe("");
+    expect(await requireGit(repositoryPath, ["rev-parse", `:${extra}`])).toBe(stagedBlob);
+    expect(await requireGit(repositoryPath, ["diff", "--cached", "--name-only"])).toBe(extra);
+    expect(await requireGit(repositoryPath, ["diff", "--name-only"])).toBe("");
+  });
+
   it("preserves extras and their staging while refreshing and pruning declared artifacts", async () => {
     const { root, repositoryPath, stateDir, global, agent } = await fixture();
     const extras = [

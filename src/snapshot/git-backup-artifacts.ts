@@ -140,9 +140,10 @@ async function readOwnedScopeManifest(
   relative: string,
   state: GitBackupRepositoryState,
   env?: NodeJS.ProcessEnv,
+  source: "working" | "head" = "working",
 ): Promise<GitBackupManifest | undefined> {
   const file = path.join(repositoryPath, relative, GIT_BACKUP_MANIFEST);
-  const stat = await lstatIfPresent(file);
+  const stat = source === "working" ? await lstatIfPresent(file) : undefined;
   let contents: string;
   if (stat) {
     if (!stat.isFile()) {
@@ -183,14 +184,27 @@ export async function prepareScopeUpdate(
   const scopePath = path.join(repositoryPath, relative);
   await assertBackupDirectory(repositoryPath, relative, state);
   const previous = await readOwnedScopeManifest(repositoryPath, relative, state, env);
+  const committed = previous
+    ? await readOwnedScopeManifest(repositoryPath, relative, state, env, "head")
+    : undefined;
   if (!manifest && !previous) {
     return undefined;
   }
   await assertBackupDirectory(repositoryPath, path.join(relative, GIT_BACKUP_TABLES), state);
-  if (manifest?.schemaVersion === 2 || previous?.schemaVersion === 2) {
+  if (
+    manifest?.schemaVersion === 2 ||
+    previous?.schemaVersion === 2 ||
+    committed?.schemaVersion === 2
+  ) {
     await assertBackupDirectory(repositoryPath, path.join(relative, "postgres"), state);
   }
-  const previousFiles = previous ? gitBackupArtifactFiles(previous) : [];
+  // A prior interrupted export may already have replaced the working manifest.
+  // Its committed predecessor still owns retired artifacts awaiting deletion.
+  const previousFiles = [
+    ...new Set(
+      [previous, committed].flatMap((value) => (value ? gitBackupArtifactFiles(value) : [])),
+    ),
+  ];
   const files = manifest ? gitBackupArtifactFiles(manifest) : [];
   const owned = new Set(previousFiles);
   // Ownership covers declared artifacts, not every file in their directory.

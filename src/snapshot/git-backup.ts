@@ -5,6 +5,7 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { discoverBackupDatabasePaths } from "../infra/backup-sqlite-snapshot.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { acquireFileLock } from "../infra/file-lock.js";
 import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import {
   GIT_TIMEOUT_MS,
@@ -16,7 +17,8 @@ import {
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
-import { spawnCommand } from "../process/exec-spawn.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { spawnCommand, withCommandProcessScope } from "../process/exec-spawn.js";
 import { BACKUP_RUN_ERROR_MAX_LENGTH } from "../state/backup-run-records.contract.js";
 import { readBackupEngine } from "./database-backup.js";
 import {
@@ -53,6 +55,17 @@ type GitBackupCreateResult = {
   pushWarning?: string;
   manifests: GitBackupManifest[];
   warnings: string[];
+};
+
+type GitBackupCreateParams = {
+  repositoryPath: string;
+  stateDir: string;
+  databases: Array<SnapshotDatabaseRef & { identity: GitBackupIdentity }>;
+  all?: boolean;
+  excludeSecrets?: boolean;
+  push?: boolean;
+  now?: Date;
+  gitEnv?: NodeJS.ProcessEnv;
 };
 
 function redactGitBackupText(value: string): string {
@@ -248,30 +261,26 @@ async function commitGitBackup(params: {
       [...identityArgs, "commit", "-m", `openclaw backup ${now.toISOString()}`],
       { env },
     );
+    const commit = await requireGit(params.repositoryPath, ["rev-parse", "HEAD"], {
+      env: params.env,
+    });
     // Converge only the managed entries in the ordinary index; preserved extras
     // retain their exact staged blobs and modes across the private-index commit.
     await requireGit(
       params.repositoryPath,
-      ["reset", "--quiet", "HEAD", "--pathspec-from-file=-", "--pathspec-file-nul"],
+      ["reset", "--quiet", commit, "--pathspec-from-file=-", "--pathspec-file-nul"],
       { env: params.env, input: params.paths.map((file) => `:(literal)${file}\0`).join("") },
     );
-    return await requireGit(params.repositoryPath, ["rev-parse", "HEAD"], { env: params.env });
+    return commit;
   } finally {
     await indexWorkspace.cleanup();
   }
 }
 
 /** Snapshot selected databases, update the deterministic tree, and commit one Git revision. */
-export async function createGitBackup(params: {
-  repositoryPath: string;
-  stateDir: string;
-  databases: Array<SnapshotDatabaseRef & { identity: GitBackupIdentity }>;
-  all?: boolean;
-  excludeSecrets?: boolean;
-  push?: boolean;
-  now?: Date;
-  gitEnv?: NodeJS.ProcessEnv;
-}): Promise<GitBackupCreateResult> {
+export async function createGitBackup(
+  params: GitBackupCreateParams,
+): Promise<GitBackupCreateResult> {
   const databases = [...params.databases];
   if (params.all) {
     const { createConfigIO } = await import("../config/io.js");
@@ -298,6 +307,41 @@ export async function createGitBackup(params: {
     stateDir: params.stateDir,
     gitEnv: params.gitEnv,
   });
+  const commonDirectory = await requireGit(repositoryPath, ["rev-parse", "--git-common-dir"], {
+    env: params.gitEnv,
+  });
+  const canonicalDirectory = await fs.realpath(
+    path.resolve(repositoryPath, normalizeGitPathForFilesystem(commonDirectory)),
+  );
+  // Private indexes isolate operator staging, not HEAD or the exported files.
+  // One cross-process owner must cover the base read through publication and push.
+  const lock = await acquireFileLock(path.join(canonicalDirectory, "openclaw-git-backup"), {
+    retries: { retries: 120, factor: 1.2, minTimeout: 50, maxTimeout: 1000 },
+    stale: 0,
+    staleRecovery: "remove-if-definitely-stale",
+  });
+  let failure: unknown;
+  try {
+    return await withCommandProcessScope(() =>
+      createGitBackupLocked(params, repositoryPath, databases),
+    );
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    // An unjoined Git child may still write. Keep ownership until this process
+    // exits instead of admitting another backup on an uncertain cleanup outcome.
+    if (!hasCommandProcessCleanupError(failure)) {
+      await lock.release();
+    }
+  }
+}
+
+async function createGitBackupLocked(
+  params: GitBackupCreateParams,
+  repositoryPath: string,
+  databases: GitBackupCreateParams["databases"],
+): Promise<GitBackupCreateResult> {
   const repositoryState = await readGitBackupRepositoryState(repositoryPath, params.gitEnv);
   const staging = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
@@ -389,30 +433,40 @@ export async function createGitBackup(params: {
   });
   let pushed = false;
   let pushWarning: string | undefined;
-  if (params.push) {
-    // Staging is path-scoped, but push ships HEAD's full ancestry. A dedicated
+  const publishedCommit = commit ?? repositoryState.head;
+  if (params.push && publishedCommit) {
+    // Staging is path-scoped, but push ships the commit's full ancestry. A dedicated
     // repository is the supported remote shape.
     const nonBackupCommitCount = await requireGit(
       repositoryPath,
-      ["rev-list", "HEAD", "--invert-grep", "--grep=^openclaw backup ", "--count"],
+      ["rev-list", publishedCommit, "--invert-grep", "--grep=^openclaw backup ", "--count"],
       { env: params.gitEnv },
     );
     if (nonBackupCommitCount !== "0") {
       pushWarning = GIT_BACKUP_NON_BACKUP_HISTORY_WARNING;
     } else {
-      const pushedResult = await runGit(repositoryPath, ["push", "-u", "origin", "HEAD"], {
+      const branch = await runGit(repositoryPath, ["symbolic-ref", "--quiet", "HEAD"], {
         env: params.gitEnv,
       });
-      if (pushedResult.code === 0) {
-        pushed = true;
+      if (branch.code !== 0) {
+        pushWarning = formatGitBackupCommandResult("git symbolic-ref HEAD", branch);
       } else {
-        pushWarning = formatGitBackupCommandResult("git push", pushedResult);
+        const pushedResult = await runGit(
+          repositoryPath,
+          ["push", "-u", "origin", `${publishedCommit}:${branch.stdout.trim()}`],
+          { env: params.gitEnv },
+        );
+        if (pushedResult.code === 0) {
+          pushed = true;
+        } else {
+          pushWarning = formatGitBackupCommandResult("git push", pushedResult);
+        }
       }
     }
   }
   return {
     repositoryPath,
-    ...(commit ? { commit } : {}),
+    ...(publishedCommit ? { commit: publishedCommit } : {}),
     noChanges: !commit,
     pushed,
     ...(pushWarning ? { pushWarning } : {}),
