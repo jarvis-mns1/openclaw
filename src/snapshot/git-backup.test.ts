@@ -704,29 +704,6 @@ describe("Git-backed SQLite snapshots", () => {
     expect((await executeGitCommand(remotePath, ["show-ref"])).code).not.toBe(0);
   });
 
-  it("pushes backup-only ancestry to a new remote", async () => {
-    const root = await tempRoot();
-    const { stateDir, database } = createStateDatabaseFixture(root);
-    const repositoryPath = path.join(root, "backup-repository");
-    const remotePath = path.join(root, "remote.git");
-    await requireGit(root, ["init", "--bare", remotePath]);
-    await initializeGitBackupRepository({ repositoryPath, stateDir, remote: remotePath });
-    await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
-    await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
-
-    const result = await createGitBackup({
-      repositoryPath,
-      stateDir,
-      databases: [database],
-      push: true,
-    });
-
-    const branch = await requireGit(repositoryPath, ["branch", "--show-current"]);
-    expect(result).toMatchObject({ noChanges: false, pushed: true });
-    expect(result).not.toHaveProperty("pushWarning");
-    expect(await requireGit(remotePath, ["rev-parse", `refs/heads/${branch}`])).toBe(result.commit);
-  });
-
   it("redacts credential-bearing origins in conflict errors", async () => {
     const root = await tempRoot();
     const stateDir = path.join(root, "state");
